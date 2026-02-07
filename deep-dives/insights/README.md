@@ -1,7 +1,7 @@
 # How Claude Code's `/insights` Command Works
 
-> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)
-> **Date:** 2026-02-07
+> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
+> **Date:** 2026-02-07\
 > **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier
 
 Claude Code ships with a `/insights` command that analyzes your past sessions and generates an HTML report about how you use it — what you work on, where things go wrong, what to try next. It's one of the more unusual features in an AI coding tool: the AI reads its own session logs, has another AI extract structured data from each one, aggregates the results, then has yet another set of AI calls write narrative sections about your usage patterns.
