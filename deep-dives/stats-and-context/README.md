@@ -1,8 +1,8 @@
-# /stats and /context Commands — Deep Dive
+# `/stats` and `/context` Commands — Deep Dive
 
-**Source:** Claude Code v2.1.34 (`deobfuscated.js`, 712,643 lines)
-**Date:** 2026-02-07
-**Annotated files:** `stats-annotated.js`, `context-annotated.js`
+> **Source:** Claude Code v2.1.34 (`deobfuscated.js`, 712,643 lines)\
+> **Date:** 2026-02-07\
+> **Annotated files:** `stats-annotated.js`, `context-annotated.js`
 
 ---
 
