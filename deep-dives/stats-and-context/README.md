@@ -1,7 +1,8 @@
 # `/stats` and `/context` Commands — Deep Dive
 
-> **Source:** Claude Code v2.1.34 (`deobfuscated.js`, 712,643 lines)\
+> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
 > **Date:** 2026-02-07\
+> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier\
 > **Annotated files:** `stats-annotated.js`, `context-annotated.js`
 
 ---

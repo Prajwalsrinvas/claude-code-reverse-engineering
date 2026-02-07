@@ -8,7 +8,11 @@ VERSION_FILE="$CACHE_DIR/.version"
 CLI_PATH="$CACHE_DIR/package/cli.js"
 
 # Get installed version
-INSTALLED_VERSION=$(claude --version 2>/dev/null || echo "unknown")
+INSTALLED_VERSION=$(claude --version 2>/dev/null || npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")
+if [[ -z "$INSTALLED_VERSION" ]]; then
+    echo "ERROR: Cannot determine Claude Code version. Install Claude Code or ensure npm is available." >&2
+    exit 1
+fi
 
 # Check cache
 if [[ -f "$VERSION_FILE" && -f "$CLI_PATH" ]]; then

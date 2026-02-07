@@ -14,6 +14,13 @@ Given a feature keyword (e.g. `insights`, `compact`), it runs a 7-step pipeline:
 6. **Report** — produces a markdown deep dive with Mermaid diagrams and line-number citations
 7. **Self-reflect** — evaluates whether the analysis revealed patterns that should improve the skill itself
 
+## Prerequisites
+
+- [Claude Code](https://code.claude.com/docs) (the skill runs inside Claude Code)
+- [Node.js](https://nodejs.org/) (for `npm` and `npx`)
+- [webcrack](https://github.com/j4k0xb/webcrack) — `npm install -g webcrack` (tested with 2.15.1)
+- [Prettier](https://github.com/prettier/prettier) — `npm install -g prettier` (tested with 3.8.1)
+
 ## Installation
 
 ```bash

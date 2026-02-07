@@ -2,7 +2,8 @@
 
 > **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
 > **Date:** 2026-02-07\
-> **Source:** Claude Code npm package, unminified with webcrack + prettier (webcrack names its output `deobfuscated.js` by convention, but the code is minified, not obfuscated)
+> **Source:** Claude Code npm package, unminified with webcrack + prettier\
+> **Annotated source:** Reuses code extracted in [`compact-annotated.js`](../compact/compact-annotated.js) (command registry, dispatch, autocomplete)
 
 ## Table of Contents
 

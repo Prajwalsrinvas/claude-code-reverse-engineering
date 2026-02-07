@@ -3,7 +3,8 @@
 > **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
 > **Estimated API cost (reference):** ~$7\
 > **Date:** 2026-02-07\
-> **Source:** Claude Code npm package, unminified with webcrack + prettier (webcrack names its output `deobfuscated.js` by convention, but the code is minified, not obfuscated)
+> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier\
+> **Annotated files:** `compact-annotated.js`
 
 ## Table of Contents
 
@@ -42,9 +43,9 @@ flowchart TD
     M --> N[Create boundary marker + summary message]
     N --> D
 
-    style C fill:#e8f5e9
-    style I fill:#e3f2fd
-    style F fill:#fff3e0
+    style C fill:#e8f5e9,color:#1a1a1a
+    style I fill:#e3f2fd,color:#1a1a1a
+    style F fill:#fff3e0,color:#1a1a1a
 ```
 
 The `/compact` command has **two code paths**:

@@ -85,7 +85,7 @@ Rules:
 - Multi-character identifiers (function names, module vars) are safe for global replace
 - Single-character identifiers must be renamed within function scope only
 - Avoid renaming `$` or `_` in functions with template literals (conflicts with `${...}`)
-- Use the **Common Patterns** table below to recognize known infrastructure functions
+- Use the **Mangled identifier reference** table in [REFERENCE.md](REFERENCE.md#mangled-identifier-reference) to recognize known infrastructure functions
 
 **Scoping strategy**: Find the `v(() => { ... })` lazy initializer that sets up the feature's module. All functions between this initializer and the next one belong to the same module. For `local-jsx` commands, also trace the `load:` → module → `call` export chain to find the entry-point component, then include all components it renders.
 
@@ -148,35 +148,7 @@ Many features render UI using React (via Ink for terminal). Key patterns:
 
 ## Common patterns
 
-These infrastructure functions appear across the codebase. Recognizing them speeds up analysis by providing a **starting hypothesis** for what a function does.
-
-**VERSION WARNING:** The mangled names in this table (e.g., `Q4`, `l`, `K1`) are artifacts of minification and **will change between Claude Code versions**. The _behavior patterns_ and _evidence signatures_ (the third column) are stable — use those to re-identify the functions in a new version. For example, the telemetry function will always be called with `("tengu_*", { ... })` regardless of what the minifier names it. When analyzing a new version, verify each pattern against the actual source rather than assuming the mangled name is still correct.
-
-| Mangled | Meaning | Evidence (stable across versions) |
-|---------|---------|----------|
-| `v(() => { ... })` | Lazy initializer (runs once on first access) | Used to wrap every module's setup code |
-| `Q4("name")` | Track feature usage / telemetry breadcrumb | Called at entry of every command with the command name |
-| `l("event_name", { ... })` | Track telemetry event with properties | `"tengu_compact"`, `"tengu_input_command"`, etc. |
-| `h("message", { level })` | Debug logging | Used throughout with `level: "error"`, `"warn"`, etc. |
-| `K1(err)` | Log error (non-fatal) | `K1(err instanceof Error ? err : Error(String(err)))` |
-| `Q8("flag_name", default)` | Read feature flag | `Q8("tengu_compact_cache_prefix", false)` |
-| `_6(value)` | Check if value is truthy | Used for env var checks: `_6(process.env.DISABLE_COMPACT)` |
-| `j6()` | Get user settings object | Returns `{ autoCompactEnabled, skillUsage, ... }` |
-| `g6({ content })` | Create a user-role message object | Used to build conversation messages |
-| `J5()` | Get the default/current model | Returns model identifier string |
-| `KA(() => ...)` | Lazy compute (memoized factory) | Like `v()` but returns a callable that caches its result |
-| `uA(obj, { key: () => val })` | Register module exports | `uA(module, { call: () => entryFunction })` |
-| `oP(messages)` | Count tokens in messages | Returns token count number |
-| `yL(messages)` | Count tokens (alternate) | Also returns token count |
-| `K6.dim(text)` | Chalk dim styling | `K6` = chalk instance |
-| `gZ()` | Generate UUID | Used for message UUIDs |
-| `lj("event", opts)` | Run lifecycle hooks | Returns hook results array |
-| `PD("action", "Context", "key")` | Get keybinding display string | e.g., `PD("app:toggleTranscript", "Global", "ctrl+o")` |
-| `s7(handlers, opts)` | Register keyboard shortcuts | Binds action handlers to key contexts |
-| `BR` | Fuse.js constructor | Fuzzy search library used for command matching |
-| `wJ(messages)` | Convert to API message format | Transforms internal messages to API format |
-| `wN(messages)` | Convert to conversation messages | Transforms for internal processing |
-| `HP(model, provider)` | Get model context window size | Returns token limit for the model |
+See the **Mangled identifier reference** table in [REFERENCE.md](REFERENCE.md#mangled-identifier-reference) for the full list of known infrastructure functions (telemetry, settings, token counting, hooks, etc.) with their call signatures and stable evidence patterns for re-identification across versions.
 
 ## Important notes
 
@@ -186,4 +158,3 @@ These infrastructure functions appear across the codebase. Recognizing them spee
 - Look for command definitions: objects with `type: "prompt"`, `name`, `description`, `getPromptForCommand`, or `type: "local-jsx"` / `type: "local"` with `load:`.
 - For `local-jsx` commands, trace the `load:` function to find the module, then find its `call` export to locate the entry point.
 - **Cite line numbers** in all analysis artifacts as `deobfuscated.js:NNNNN` for traceability.
-- Check REFERENCE.md for tool comparison notes and Bun binary format details.

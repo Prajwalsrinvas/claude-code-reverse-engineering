@@ -2,7 +2,8 @@
 
 > **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
 > **Date:** 2026-02-07\
-> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier
+> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier\
+> **Annotated files:** `insights-annotated.js`
 
 Claude Code ships with a `/insights` command that analyzes your past sessions and generates an HTML report about how you use it — what you work on, where things go wrong, what to try next. It's one of the more unusual features in an AI coding tool: the AI reads its own session logs, has another AI extract structured data from each one, aggregates the results, then has yet another set of AI calls write narrative sections about your usage patterns.
 
@@ -65,26 +66,26 @@ The `/insights` command runs a multi-stage pipeline. Some stages are pure comput
 ```mermaid
 flowchart TD
     A["/insights command invoked"] --> B["Load all sessions from disk"]
-    B --> C["Filter: remove agent sessions,\ninsights self-sessions, invalid timestamps"]
-    C --> D["Deduplicate by session ID\n(keep highest message count)"]
-    D --> E["Filter: require ≥2 user messages\nand ≥1 minute duration"]
-    E --> F["Extract metadata from each session\n(tool counts, languages, tokens, etc.)"]
-    F --> G{"Facets cached\non disk?"}
+    B --> C["Filter: remove agent sessions,<br>insights self-sessions, invalid timestamps"]
+    C --> D["Deduplicate by session ID<br>(keep highest message count)"]
+    D --> E["Filter: require ≥2 user messages<br>and ≥1 minute duration"]
+    E --> F["Extract metadata from each session<br>(tool counts, languages, tokens, etc.)"]
+    F --> G{"Facets cached<br>on disk?"}
     G -- Yes --> H["Load cached facets"]
-    G -- No --> I["LLM: Extract facets per session\n(model: Opus, max 50 new sessions)"]
+    G -- No --> I["LLM: Extract facets per session<br>(model: Opus, max 50 new sessions)"]
     I --> J["Cache facets to disk"]
     J --> H
     H --> K["Filter out warmup-only sessions"]
     K --> L["Aggregate statistics across all sessions"]
-    L --> M["LLM: Generate 7 narrative sections\n(parallel, model: Opus)"]
-    M --> N["LLM: Generate At a Glance summary\n(sequential, uses results from step above)"]
+    L --> M["LLM: Generate 7 narrative sections<br>(parallel, model: Opus)"]
+    M --> N["LLM: Generate At a Glance summary<br>(sequential, uses results from step above)"]
     N --> O["Build HTML report"]
     O --> P["Write report.html to ~/.claude/usage-data/"]
     P --> Q["Return report URL to user"]
 
-    style I fill:#e8d5f5,stroke:#7c3aed
-    style M fill:#e8d5f5,stroke:#7c3aed
-    style N fill:#e8d5f5,stroke:#7c3aed
+    style I fill:#e8d5f5,stroke:#7c3aed,color:#1a1a1a
+    style M fill:#e8d5f5,stroke:#7c3aed,color:#1a1a1a
+    style N fill:#e8d5f5,stroke:#7c3aed,color:#1a1a1a
 ```
 
 Three types of LLM calls, all using the same model:
@@ -700,17 +701,7 @@ Sessions are read from `~/.claude/projects/` (the standard session storage locat
 
 ## Reproducing this analysis
 
-This process can be applied to any Claude Code feature:
-
-1. **Acquire**: `npm pack @anthropic-ai/claude-code` and extract `cli.js` (approach from [Lee Han Chung's blog](https://leehanchung.github.io/blogs/2025/03/07/claude-code/))
-2. **Unminify**: `npx webcrack cli.js --no-unpack --no-deobfuscate --force -o output/` then `npx prettier --write output/deobfuscated.js` ([webcrack](https://github.com/j4k0xb/webcrack) for AST transforms, [Prettier](https://github.com/prettier/prettier) for formatting)
-3. **Locate**: `grep` for the feature's anchor strings (command name, prompts, unique labels) — the insight that string literals survive minification intact is well-documented by [Martin Alderson](https://martinalderson.com/posts/minification-isnt-obfuscation-claude-code-proves-it/) and [0xdevalias](https://gist.github.com/0xdevalias/d8b743efb82c0e9406fc69da0d6c6581)
-4. **Extract**: Pull out the relevant function block and its dependencies
-5. **Rename**: Infer identifier names from usage context and string literals (technique from [humanify](https://github.com/jehna/humanify) — use LLMs to suggest names, keep code structure untouched via AST)
-6. **Analyze**: Cross-reference against actual output (run the feature first to generate output files)
-7. **Report**: Document findings with code excerpts as evidence
-
-The string literals are your best friends. Prompts, field names, error messages, and HTML templates survive minification perfectly and tell you exactly what each function does.
+This process can be applied to any Claude Code feature. The methodology is packaged as a reusable [Claude Code skill](../../skill/) with automation scripts — see the [root README](../../README.md#how-the-source-is-obtained) for the general process and [SKILL.md](../../skill/SKILL.md) for the full 7-step pipeline.
 
 ---
 
@@ -734,5 +725,4 @@ See the full list in [skill/REFERENCE.md](../../skill/REFERENCE.md#prior-art).
 
 | File | What |
 |------|------|
-| `insights-annotated.js` | Annotated extract (~2,200 lines) — function and variable names inferred from context |
-| `../webcrack-output/deobfuscated.js` | Full unminified CLI (712,643 lines) — not included in repo (17 MB); reproduce via steps 1–2 above |
+| `../webcrack-output/deobfuscated.js` | Full unminified CLI (712,643 lines) — not included in repo (17 MB); reproduce via [How the source is obtained](../../README.md#how-the-source-is-obtained) |

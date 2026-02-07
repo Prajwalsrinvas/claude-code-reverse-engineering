@@ -69,21 +69,6 @@ Do not exist for Claude Code. Checked across:
 | ghuntley | Cleanroom LLM transpilation | [ghuntley.com](https://ghuntley.com/tradecraft/) |
 | 0xdevalias | Comprehensive tool/technique catalogue | [gist](https://gist.github.com/0xdevalias/d8b743efb82c0e9406fc69da0d6c6581) |
 
-## Useful patterns in Claude Code source
-
-- **Command definitions**: Objects with `{ type: "prompt", name: "...", description: "...", getPromptForCommand(args) { ... } }` or `{ type: "local", name: "...", load: () => ... }` or `{ type: "local-jsx", ... }`
-- **API calls**: Look for `querySource: "feature_name"` in options objects passed to the call helper
-- **Lazy init**: `var initFoo = v(() => { /* runs once */ })` — the `v()` wrapper is a lazy initializer
-- **Lazy compute**: `var getFoo = KA(() => value)` — memoized factory, returns a callable
-- **Feature flags**: Check for `isEnabled: () => ...` in command definitions, and `Q8("flag_name", default)` for runtime flags
-- **File paths**: `join(getClaudeConfigDir(), "subfolder")` pattern for config/data paths
-- **Error handling**: `K1(err instanceof Error ? err : Error("..."))` pattern for non-fatal logging
-- **Telemetry**: `l("tengu_feature_event", { key: value })` for analytics events; `Q4("feature")` for usage breadcrumbs
-- **Settings**: `j6()` returns the user settings object
-- **Messages**: `g6({ content })` creates a user-role message; `wJ()` converts to API format
-- **Token counting**: `oP(messages)` and `yL(messages)` count tokens
-- **Hooks**: `lj("event", opts)` runs lifecycle hooks; `wW6(params, signal)` runs pre-compact hooks specifically
-
 ## Command registry architecture
 
 Commands are collected from multiple sources and merged into a single list:
@@ -105,36 +90,38 @@ The autocomplete menu uses **Fuse.js** for fuzzy matching with weighted fields (
 
 ## Mangled identifier reference
 
-These identifiers were discovered across multiple analyses. **The mangled names WILL change between Claude Code versions** since they are artifacts of minification. However, the _behavioral signatures_ (how the function is called, what string arguments it receives) remain stable. Use the "Notes" column to re-identify functions in a new version.
+These infrastructure functions appear across the codebase. Recognizing them speeds up analysis by providing a starting hypothesis for what a function does.
 
-For example: the telemetry function is always called as `someName("tengu_*", { ... })` — search for that call pattern to find it regardless of what the minifier named it.
+**The mangled names WILL change between Claude Code versions** since they are artifacts of minification. The _behavior patterns_ and _evidence signatures_ (the third column) are stable — use those to re-identify the functions in a new version. For example, the telemetry function will always be called with `("tengu_*", { ... })` regardless of what the minifier names it.
 
-| Mangled | Meaning | Notes |
-|---------|---------|-------|
-| `v()` | Lazy initializer | Wraps module setup code |
-| `KA()` | Lazy compute / memoized factory | Returns callable that caches result |
-| `uA()` | Register module exports | `uA(module, { call: () => fn })` |
-| `Q4()` | Feature usage tracking | Entry-point breadcrumb |
-| `l()` | Telemetry event | `l("tengu_*", { ... })` |
-| `h()` | Debug log | `h("msg", { level: "error" })` |
-| `K1()` | Error logger (non-fatal) | Wraps in Error if needed |
-| `Q8()` | Feature flag reader | `Q8("flag", default)` |
-| `_6()` | Truthy check | For env vars |
-| `j6()` | Settings accessor | Returns settings object |
-| `g6()` | Message factory | Creates user-role messages |
-| `J5()` | Default model getter | Returns model ID string |
-| `oP()` / `yL()` | Token counters | Count tokens in message arrays |
-| `K6` | Chalk instance | `K6.dim()`, `K6.bold()`, etc. |
-| `gZ()` | UUID generator | For message IDs |
-| `lj()` | Lifecycle hook runner | Returns hook results |
-| `PD()` | Keybinding display | Human-readable key combo |
-| `s7()` | Keyboard shortcut register | Binds handlers to contexts |
-| `HP()` | Context window size getter | `HP(model, provider)` |
-| `BR` | Fuse.js | Fuzzy search constructor |
-| `wJ()` | To API message format | Internal → API transform |
-| `wN()` | To conversation messages | Internal transform |
-| `q1(N)` | React memo cache alloc | `Symbol.for("react.memo_cache_sentinel")` |
-| `f` | Ink `<Text>` component | In `createElement(f, props, ...)` |
-| `I` | Ink `<Box>` component | Layout container |
+| Mangled | Meaning | Evidence (stable across versions) |
+|---------|---------|----------|
+| `v(() => { ... })` | Lazy initializer (runs once on first access) | Used to wrap every module's setup code |
+| `Q4("name")` | Track feature usage / telemetry breadcrumb | Called at entry of every command with the command name |
+| `l("event_name", { ... })` | Track telemetry event with properties | `"tengu_compact"`, `"tengu_input_command"`, etc. |
+| `h("message", { level })` | Debug logging | Used throughout with `level: "error"`, `"warn"`, etc. |
+| `K1(err)` | Log error (non-fatal) | `K1(err instanceof Error ? err : Error(String(err)))` |
+| `Q8("flag_name", default)` | Read feature flag | `Q8("tengu_compact_cache_prefix", false)` |
+| `_6(value)` | Check if value is truthy | Used for env var checks: `_6(process.env.DISABLE_COMPACT)` |
+| `j6()` | Get user settings object | Returns `{ autoCompactEnabled, skillUsage, ... }` |
+| `g6({ content })` | Create a user-role message object | Used to build conversation messages |
+| `J5()` | Get the default/current model | Returns model identifier string |
+| `KA(() => ...)` | Lazy compute (memoized factory) | Like `v()` but returns a callable that caches its result |
+| `uA(obj, { key: () => val })` | Register module exports | `uA(module, { call: () => entryFunction })` |
+| `oP(messages)` | Count tokens in messages | Returns token count number |
+| `yL(messages)` | Count tokens (alternate) | Also returns token count |
+| `K6.dim(text)` | Chalk dim styling | `K6` = chalk instance |
+| `gZ()` | Generate UUID | Used for message UUIDs |
+| `lj("event", opts)` | Run lifecycle hooks | Returns hook results array |
+| `wW6(params, signal)` | Run pre-compact hooks | Pre-compact hook runner specifically |
+| `PD("action", "Context", "key")` | Get keybinding display string | e.g., `PD("app:toggleTranscript", "Global", "ctrl+o")` |
+| `s7(handlers, opts)` | Register keyboard shortcuts | Binds action handlers to key contexts |
+| `BR` | Fuse.js constructor | Fuzzy search library used for command matching |
+| `wJ(messages)` | Convert to API message format | Transforms internal messages to API format |
+| `wN(messages)` | Convert to conversation messages | Transforms for internal processing |
+| `HP(model, provider)` | Get model context window size | Returns token limit for the model |
+| `q1(N)` | React memo cache alloc | `Symbol.for("react.memo_cache_sentinel")` — verbose but mechanical memoization boilerplate |
+| `f` | Ink `<Text>` component | In `createElement(f, { dimColor: true }, ...)` |
+| `I` | Ink `<Box>` component | Layout container in `createElement(I, { ... }, ...)` |
 
 **Note:** These mangled names are version-specific. They will likely differ in future Claude Code releases. Always verify against the actual source.

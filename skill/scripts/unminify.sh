@@ -28,7 +28,7 @@ if [[ -f "$VERSION_FILE" && -f "$DEOBFUSCATED" ]]; then
 fi
 
 echo "Running webcrack (syntax transforms)..."
-npx webcrack "$CLI_PATH" --no-unpack --no-deobfuscate --force -o "$OUTPUT_DIR"
+npx webcrack@2 "$CLI_PATH" --no-unpack --no-deobfuscate --force -o "$OUTPUT_DIR"
 
 if [[ ! -f "$DEOBFUSCATED" ]]; then
     echo "ERROR: webcrack did not produce deobfuscated.js" >&2
@@ -36,7 +36,7 @@ if [[ ! -f "$DEOBFUSCATED" ]]; then
 fi
 
 echo "Running prettier (formatting)..."
-npx prettier --write "$DEOBFUSCATED"
+npx prettier@3 --write "$DEOBFUSCATED"
 
 LINES=$(wc -l < "$DEOBFUSCATED")
 echo "$INSTALLED_VERSION" > "$VERSION_FILE"
