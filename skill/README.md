@@ -6,8 +6,8 @@ A [Claude Code custom skill](https://code.claude.com/docs/en/skills) that revers
 
 Given a feature keyword (e.g. `insights`, `compact`), it runs a 7-step pipeline:
 
-1. **Acquire** — downloads `cli.js` from the npm package
-2. **Unminify** — runs webcrack + prettier to produce ~712K lines of readable JS
+1. **Acquire** — extracts `cli.js` from the installed native Bun binary (the npm package no longer ships code)
+2. **Unminify** — runs webcrack (`--no-jsx`) + prettier to produce ~965K lines of readable JS
 3. **Locate** — searches for anchor strings (command names, prompts, telemetry events) to find the feature's code
 4. **Extract & annotate** — pulls out the relevant code and renames mangled identifiers to meaningful names
 5. **Analyze** — documents behavior, LLM calls, data flow, caching, and edge cases
@@ -16,10 +16,11 @@ Given a feature keyword (e.g. `insights`, `compact`), it runs a 7-step pipeline:
 
 ## Prerequisites
 
-- [Claude Code](https://code.claude.com/docs) (the skill runs inside Claude Code)
-- [Node.js](https://nodejs.org/) (for `npm` and `npx`)
-- [webcrack](https://github.com/j4k0xb/webcrack) — `npm install -g webcrack` (tested with 2.15.1)
-- [Prettier](https://github.com/prettier/prettier) — `npm install -g prettier` (tested with 3.8.1)
+- [Claude Code](https://code.claude.com/docs) installed as the native binary (the skill extracts source from it)
+- [Node.js](https://nodejs.org/) (for `npx`) and Python 3 (for the binary extractor)
+- `readelf`/`file` (binutils) — used by the extractor to find the `.bun` section on Linux
+- [webcrack](https://github.com/j4k0xb/webcrack) — run via `npx webcrack@2` (tested with 2.16.0)
+- [Prettier](https://github.com/prettier/prettier) — run via `npx prettier@3`
 
 ## Installation
 
@@ -40,6 +41,7 @@ Or just ask Claude Code to analyze a feature — the skill's description lets Cl
 | File | Purpose |
 |------|---------|
 | `SKILL.md` | Main skill instructions (the pipeline) |
-| `REFERENCE.md` | Stable patterns, infrastructure functions, and prior art |
-| `scripts/extract-cli.sh` | Downloads cli.js from npm |
-| `scripts/unminify.sh` | Runs webcrack + prettier |
+| `REFERENCE.md` | Stable patterns, infrastructure functions, anchor strings, and prior art |
+| `scripts/extract-cli.sh` | Locates the installed native binary and extracts cli.js from it |
+| `scripts/extract-bun-cli.py` | Parses the Bun binary module graph (`.bun` ELF section) to pull out cli.js |
+| `scripts/unminify.sh` | Runs webcrack (`--no-jsx`) + prettier |

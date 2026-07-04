@@ -1,47 +1,69 @@
 #!/usr/bin/env bash
-# Extract cli.js from the Claude Code npm package.
-# Caches by version to avoid redundant downloads.
+# Extract cli.js from the Claude Code native binary.
+#
+# Since v2.1.113 the npm package (@anthropic-ai/claude-code) is a thin installer
+# and no longer contains cli.js — the real CLI ships as a per-platform native
+# Bun executable with the JS embedded in its module graph. This script locates
+# the installed binary and extracts cli.js from it. Caches by version.
 set -euo pipefail
 
 CACHE_DIR="/tmp/claude-code-npm"
 VERSION_FILE="$CACHE_DIR/.version"
 CLI_PATH="$CACHE_DIR/package/cli.js"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Get installed version
-INSTALLED_VERSION=$(claude --version 2>/dev/null || npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")
+INSTALLED_VERSION=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
 if [[ -z "$INSTALLED_VERSION" ]]; then
-    echo "ERROR: Cannot determine Claude Code version. Install Claude Code or ensure npm is available." >&2
+    echo "ERROR: Cannot determine Claude Code version. Install Claude Code (the native binary)." >&2
     exit 1
 fi
 
 # Check cache
 if [[ -f "$VERSION_FILE" && -f "$CLI_PATH" ]]; then
-    CACHED_VERSION=$(cat "$VERSION_FILE")
-    if [[ "$CACHED_VERSION" == "$INSTALLED_VERSION" ]]; then
+    if [[ "$(cat "$VERSION_FILE")" == "$INSTALLED_VERSION" ]]; then
         echo "Using cached cli.js for version $INSTALLED_VERSION"
         echo "Path: $CLI_PATH"
         exit 0
     fi
 fi
 
-echo "Downloading Claude Code npm package..."
-mkdir -p "$CACHE_DIR"
-cd "$CACHE_DIR"
+# Locate the installed native binary. Common locations:
+#   ~/.local/share/claude/versions/<version>   (Linux/macOS user install)
+#   the resolved target of `which claude`
+BINARY=""
+for cand in \
+    "$HOME/.local/share/claude/versions/$INSTALLED_VERSION" \
+    "$(command -v claude 2>/dev/null || true)"; do
+    if [[ -n "$cand" && -f "$cand" ]]; then
+        # Skip shell-script shims; we need the actual ELF/Mach-O executable.
+        if file "$cand" 2>/dev/null | grep -qiE 'ELF|Mach-O|executable'; then
+            BINARY="$cand"
+            break
+        fi
+    fi
+done
 
-# Clean up any previous extraction
-rm -rf package/ anthropic-ai-claude-code-*.tgz
+if [[ -z "$BINARY" ]]; then
+    echo "ERROR: Could not find the native Claude Code binary for $INSTALLED_VERSION." >&2
+    echo "Looked in ~/.local/share/claude/versions/ and \$(which claude)." >&2
+    echo "As a fallback you can 'npm pack @anthropic-ai/claude-code-<platform>' to fetch the" >&2
+    echo "platform binary tarball (package/claude), then point this script at it." >&2
+    exit 1
+fi
 
-# Download and extract
-npm pack @anthropic-ai/claude-code 2>/dev/null
-tar -xzf anthropic-ai-claude-code-*.tgz
-rm -f anthropic-ai-claude-code-*.tgz
+echo "Extracting cli.js from native binary: $BINARY"
+mkdir -p "$CACHE_DIR/package"
+rm -f "$CLI_PATH"
+python3 "$SCRIPT_DIR/extract-bun-cli.py" "$BINARY" "$CACHE_DIR/bun-modules"
+cp "$CACHE_DIR/bun-modules/cli.js" "$CLI_PATH"
 
-# Verify
 if [[ ! -f "$CLI_PATH" ]]; then
-    echo "ERROR: cli.js not found after extraction" >&2
+    echo "ERROR: cli.js not produced by the extractor." >&2
     exit 1
 fi
 
 echo "$INSTALLED_VERSION" > "$VERSION_FILE"
 echo "Extracted cli.js ($(du -h "$CLI_PATH" | cut -f1)) for version $INSTALLED_VERSION"
+echo "Also extracted (in $CACHE_DIR/bun-modules): the Bun bytecode siblings and the"
+echo "image-processor / audio-capture Rust NAPI addons."
 echo "Path: $CLI_PATH"

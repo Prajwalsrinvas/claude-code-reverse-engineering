@@ -33,13 +33,15 @@ If the user says to skip steps (e.g., "unminified source already exists at X, sk
 
 ### Step 1: Acquire source
 
-Run `scripts/extract-cli.sh` to download and extract `cli.js` from the npm package. The script caches by version.
+Run `scripts/extract-cli.sh` to extract `cli.js` from the installed native binary. The script caches by version.
 
 ```bash
 bash ~/.claude/skills/analyze-cc-feature/scripts/extract-cli.sh
 ```
 
-This produces `/tmp/claude-code-npm/package/cli.js`.
+**Important — the source is no longer in the npm package.** Since v2.1.113 the npm package (`@anthropic-ai/claude-code`) is a ~170 KB thin installer; the real CLI ships as a per-platform native **Bun standalone executable** (~250 MB) with the JavaScript embedded in its module graph. `extract-cli.sh` locates the installed binary (`~/.local/share/claude/versions/<version>` or `$(which claude)`) and runs `scripts/extract-bun-cli.py` to pull `cli.js` out of the binary's module graph. It also drops the sibling modules (a precompiled Bun bytecode blob and two Rust NAPI addons — `image-processor.node`, `audio-capture.node`) into `/tmp/claude-code-npm/bun-modules/`.
+
+This produces `/tmp/claude-code-npm/package/cli.js` (~18 MB). See [REFERENCE.md](REFERENCE.md#bun-binary-format) for the binary format details if you need to adapt the extractor to a new layout.
 
 ### Step 2: Unminify
 
@@ -49,7 +51,9 @@ Run `scripts/unminify.sh` to produce readable source. The script caches the outp
 bash ~/.claude/skills/analyze-cc-feature/scripts/unminify.sh
 ```
 
-This produces a `webcrack-output/deobfuscated.js` file (700K+ lines, well-formatted). Despite the filename, this is unminified code — see terminology note above.
+This produces `webcrack-output/deobfuscated.js` (~965K lines for 2.1.201, well-formatted). Despite the filename, this is unminified code — see terminology note above.
+
+**The script runs webcrack with `--no-jsx`.** On today's ~18 MB bundle the JSX-decompile pass takes ~50 min, needs 4 GB+ RAM, and currently emits output Prettier can't reparse. Skipping it costs only verbose `createElement(...)` + React memo-cache boilerplate (mechanical to read — see the React/Ink section). If you specifically need decompiled JSX for a UI feature, run the JSX pass separately on the *extracted module* (a few thousand lines) rather than the whole bundle.
 
 ### Step 3: Locate the feature
 
@@ -132,10 +136,12 @@ For `local-jsx` commands, the extraction strategy differs — see the React/Ink 
 
 ### How commands are dispatched
 
-The dispatch function (`NGY`) matches on `command.type`:
-- `"local"` — Calls `(await command.load()).call(args, toolUseContext)` and handles the return type (`"compact"`, `"skip"`, `"microcompact"`, or plain value)
+The dispatch function (mangled name changes per version) matches on `command.type`:
+- `"local"` — Calls `(await command.load()).call(args, toolUseContext)` and handles the return type (`"compact"`, `"skip"`, or plain value)
 - `"local-jsx"` — Same load pattern, but the result is rendered as JSX
 - `"prompt"` — Calls `command.getPromptForCommand(args, context)` and injects the result as messages
+
+**New field to expect (2.1.201): `thinClientDispatch`.** Command objects now carry a `thinClientDispatch` tag (`"post-text"`, `"control-request"`, …) that routes the command when the session is being driven by a thin client / remote control instead of the local TUI. `"control-request"` commands (e.g. `/context`, `/usage`) can be answered by the remote side via a control request rather than local execution. Many former built-in commands are now **skills** loaded from `SKILL.md` files (e.g. `/code-review`, `/simplify`), so if you can't find a command in the built-in registry, check the bundled/loaded skills.
 
 ## React/Ink components
 

@@ -27,8 +27,14 @@ if [[ -f "$VERSION_FILE" && -f "$DEOBFUSCATED" ]]; then
     fi
 fi
 
-echo "Running webcrack (syntax transforms)..."
-npx webcrack@2 "$CLI_PATH" --no-unpack --no-deobfuscate --force -o "$OUTPUT_DIR"
+# NOTE: `--no-jsx` is important. On today's ~18 MB bundle webcrack's JSX-decompile
+# pass takes ~50 min, uses 4 GB+ RAM, and (as of this writing) emits output that
+# Prettier cannot reparse. Disabling it costs only verbose `createElement(...)` +
+# React memo-cache boilerplate, which is mechanical to read. `--max-old-space-size`
+# is raised because the bundle is large.
+echo "Running webcrack (syntax transforms, JSX decompile disabled)..."
+NODE_OPTIONS="--max-old-space-size=12288" \
+    npx webcrack@2 "$CLI_PATH" --no-unpack --no-deobfuscate --no-jsx --force -o "$OUTPUT_DIR"
 
 if [[ ! -f "$DEOBFUSCATED" ]]; then
     echo "ERROR: webcrack did not produce deobfuscated.js" >&2
@@ -36,7 +42,7 @@ if [[ ! -f "$DEOBFUSCATED" ]]; then
 fi
 
 echo "Running prettier (formatting)..."
-npx prettier@3 --write "$DEOBFUSCATED"
+NODE_OPTIONS="--max-old-space-size=12288" npx prettier@3 --write "$DEOBFUSCATED"
 
 LINES=$(wc -l < "$DEOBFUSCATED")
 echo "$INSTALLED_VERSION" > "$VERSION_FILE"
