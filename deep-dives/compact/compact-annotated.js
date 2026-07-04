@@ -1,10 +1,10 @@
 // ============================================================================
 // Claude Code /compact — annotated extraction
-// Source: Claude Code npm package v2.1.201, webcrack --no-jsx + prettier
+// Source: Claude Code v2.1.201 (extracted from the native Bun binary), webcrack --no-jsx + prettier
 // Date extracted: 2026-07-04
-// Previous pass covered v2.1.34 (see README.md's old excerpts) — this file is
-// a full rewrite: the architecture changed substantially between the two
-// versions (see /tmp/.../scratchpad/ev-compact.md for the full diff).
+// Previous pass covered v2.1.34 — this file is a full rewrite: the architecture
+// changed substantially between the two versions (see the companion README.md's
+// "How this evolved" section for the full diff).
 //
 // Identifiers below are RENAMED from the mangled source for readability.
 // Every renamed symbol carries a `// deobfuscated.js:NNNNN` line reference to

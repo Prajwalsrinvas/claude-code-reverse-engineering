@@ -136,7 +136,7 @@ This is the distinction behind the Agent tool's own doc line "Returns null if �
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | Subagent nesting depth | 5 | Max spawn depth; enforced by tool-visibility and a call-time guard |
-| Workflow concurrency | `min(16, cpuCount − 2)` | Concurrent `agent()` calls per workflow |
+| Workflow concurrency | `min(16, max(2, cpuCount − 2))` | Concurrent `agent()` calls per workflow |
 | Workflow lifetime agents | 1,000 | Runaway-loop backstop |
 | Items per parallel/pipeline call | 4,096 | Hard error above this |
 | Recoverable error kinds | rate_limit, overloaded, server_error | Trigger partial-work salvage |

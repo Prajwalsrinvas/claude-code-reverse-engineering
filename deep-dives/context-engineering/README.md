@@ -68,7 +68,7 @@ The model gate has a twist worth documenting, because it shows how much of this 
 function requiresClassicPrompt(model) {
   // ...
   if (model.includes("claude-3-") || model.includes("haiku") ||
-      model.includes("sonnet") || model === "claude-opus-4-1" /* … 4-5,4-6,4-7 */)
+      model.includes("sonnet") || model === "claude-opus-4-0" /* … 4-1,4-5,4-6,4-7 */)
     return true;
   return !isKnownCurrentModel();
 }

@@ -1,6 +1,6 @@
 // ============================================================================
 // Claude Code Agents & Workflows orchestration — annotated extraction
-// Source: Claude Code npm package v2.1.201, webcrack --no-jsx + prettier
+// Source: Claude Code v2.1.201 (extracted from the native Bun binary), webcrack --no-jsx + prettier
 // Date extracted: 2026-07-04
 //
 // Covers: the Agent/Task tool (subagent spawn), background-by-default
@@ -9,7 +9,7 @@
 // workflow engine (2.1.154), the `claude agents` dashboard (2.1.139),
 // partial-work-on-rate-limit recovery (2.1.199), and worktree isolation.
 //
-// Full findings + line-cited excerpts: see ev-agents.md (evidence pack).
+// Full findings + line-cited excerpts are in the companion README.md.
 //
 // Identifiers below are RENAMED from the mangled source for readability.
 // Every renamed symbol carries a `// deobfuscated.js:NNNNN` line reference to

@@ -29,7 +29,7 @@ Skills are Claude Code's mechanism for turning a Markdown file with YAML frontma
 
 ## The one-tool model
 
-Every skill — SKILL.md-authored, plugin-provided, MCP-served, or hardcoded — is exposed to the model through exactly **one** tool named `Skill` (`deobfuscated.js:589772`, tool-name constant `Fh = "Skill"`). Its input schema is tiny (`deobfuscated.js:589751`):
+Every skill — SKILL.md-authored, plugin-provided, MCP-served, or hardcoded — is exposed to the model through exactly **one** tool named `Skill` (the tool object is at `deobfuscated.js:589772`; the tool-name constant `Fh = "Skill"` is defined at `deobfuscated.js:298547`). Its input schema is tiny (`deobfuscated.js:589751`):
 
 ```js
 Skill({
@@ -51,7 +51,7 @@ The tool's output schema is a union that already tells you the two execution mod
 
 ## Where skills come from
 
-Five sources, merged into one registry:
+Six sources, merged into one registry:
 
 | Source | Location | `source` / `loadedFrom` |
 |--------|----------|--------------------------|
@@ -126,7 +126,7 @@ There's a subtlety worth flagging (see [Open questions](#open-questions)): the c
 `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS` (env) or `disableBundledSkills: true` (settings) — `deobfuscated.js:311810`. It treats two source tags differently, which is a genuinely useful distinction:
 
 - **`source: "bundled"`** (real SKILL.md-shaped skills shipped in the CLI) — **removed entirely**; they never enter the registry.
-- **`source: "builtin"`** (the ~150 hardcoded slash-command objects) — **stay typable but hidden from the model** (demoted from "on" to "user-invocable-only").
+- **`source: "builtin"`** (the ~110 hardcoded slash-command objects) — **stay typable but hidden from the model** (demoted from "on" to "user-invocable-only").
 
 Plugins, `.claude/skills/`, and `.claude/commands/` are untouched. The registry cache key includes this flag's value, so flipping it mid-session correctly invalidates the memoized list. (Added 2.1.169.)
 
@@ -142,7 +142,7 @@ The listing is budgeted (`deobfuscated.js:364111`) with escalating degradation m
 
 ## Skills vs built-in commands
 
-Everything flows through one merged registry (`deobfuscated.js:775877`) that feeds both slash-command typing and the `Skill` tool. The ~150 hardcoded commands (`/compact`, `/clear`, `/rewind`, …) are merged into the same array shape as skills and pass through the same `type` discriminator:
+Everything flows through one merged registry (`deobfuscated.js:775877`) that feeds both slash-command typing and the `Skill` tool. The ~110 hardcoded commands (`/compact`, `/clear`, `/rewind`, …) are merged into the same array shape as skills and pass through the same `type` discriminator:
 
 - **`type: "prompt"`** = a skill: its body came from Markdown (SKILL.md, `.claude/commands/*.md`, a plugin skill, or an MCP prompt). Has a `loadedFrom` value.
 - **`type: "local"`** = a TS-implemented command with a `call()` handler. Has `source: "builtin"`, no `loadedFrom`.

@@ -54,6 +54,9 @@ The environment-worker poll config (`deobfuscated.js:763984`), server-overridabl
   poll_interval_ms_not_at_capacity: 2000,     //  2s  — room for more work
   poll_interval_ms_at_capacity:     600000,   // 10min — fully connected/busy
   non_exclusive_heartbeat_interval_ms: 0,     // optional liveness ping, off by default
+  multisession_poll_interval_ms_not_at_capacity: 2000,
+  multisession_poll_interval_ms_partial_capacity: 2000,
+  multisession_poll_interval_ms_at_capacity: 600000,
   reclaim_older_than_ms: 5000,                // server reclaims orphaned work after 5s
   session_keepalive_interval_v2_ms: 120000,   // 2min keepalive
 }
@@ -104,7 +107,7 @@ This is the security-relevant core. Because the control channel is trusted once 
 | 9 | Feature-flag service reachable | "feature-flag evaluation disabled/unavailable" |
 | 10 | `tengu_ccr_bridge` rollout flag | "not yet enabled for your account" |
 
-Conditions #1 and #5 are the ones that match the changelog's security notes exactly: Remote Control is off whenever a non-Anthropic base URL or a cloud provider (Bedrock/Vertex/Foundry/…) is in play (2.1.181/197), and off whenever an API key or auth token is set instead of a claude.ai login (2.1.126). Verified directly: the base-URL check (`deobfuscated.js:120086`) is literally `new URL(baseUrl).host === "api.anthropic.com"`.
+Conditions #1 and #5 are the ones that match the changelog's security notes exactly: Remote Control is off whenever a non-Anthropic base URL or a cloud provider (Bedrock/Vertex/Foundry/…) is in play (2.1.181/197), and off whenever an API key or auth token is set instead of a claude.ai login (2.1.126). Verified directly: the base-URL check (`deobfuscated.js:120086`) is `["api.anthropic.com"].includes(new URL(baseUrl).host)`.
 
 Managed-settings controls: `disableRemoteControl` (hard off switch, typically a managed setting), `remoteControlAtStartup` (auto-start toggle), and `isolatePeerMachines` (require approval before cross-machine SendMessage). A `getBridgeDoctorInfo` diagnostic walks the same 10 points with per-item `ok` booleans.
 

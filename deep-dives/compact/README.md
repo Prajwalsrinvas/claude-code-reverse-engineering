@@ -61,7 +61,7 @@ At 2.1.34 the whole feature sat in one `v(() => {...})` module. In 2.1.201 it is
 |---------|---------------------------|----------|
 | Command registration | 647519–647920 | `/compact` and the new `/autocompact` |
 | Prompt text + legacy full-compact | 400760–402770 | Summarization prompts, legacy compactor, cache-sharing API call |
-| Reactive / precompute engine | 403200–404200 | Precompute cache, grouped adaptive retry |
+| Reactive / precompute engine | 402608–404200 | Grouped adaptive retry compactor (from ~402608) + precompute cache (403200+) |
 | Auto-compact thresholds + breaker | 619860–620530 | Threshold math, circuit breaker, thrash detector |
 | Reactive micro-clear | 597188–597290, 615914–616029 | `context_hint`-reject driven tool-result clearing |
 | PreCompact hook runner | 627034–627070 | Hook payload assembly |
@@ -79,7 +79,7 @@ At 2.1.34 the whole feature sat in one `v(() => {...})` module. In 2.1.201 it is
   isEnabled: () => !DISABLE_COMPACT,
   supportsNonInteractive: true,
   argumentHint: "<optional custom summarization instructions>",
-  thinClientDispatch: "post-text",   // new: generic thin-client routing tag (~15 commands use it)
+  thinClientDispatch: "post-text",   // new: generic thin-client routing tag (8 commands carry "post-text")
   load: () => Promise.resolve().then(() => { initCompactModule(); return compactModule; }),
 }
 ```

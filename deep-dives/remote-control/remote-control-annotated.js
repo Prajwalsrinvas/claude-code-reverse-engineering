@@ -7,7 +7,7 @@
  * Identifiers below are renamed from the mangled originals for readability;
  * original names are noted inline as `// orig: X`. Line numbers refer to the
  * canonical deobfuscated.js. This file is a hand-annotated EXTRACT, not a
- * drop-in replacement — read it alongside ev-remote.md.
+ * drop-in replacement — read it alongside the companion README.md.
  *
  * BIG PICTURE
  * There are (at least) two distinct bridging subsystems that both get called
@@ -114,7 +114,7 @@ function dispatchControlRequestThinClient(request, ctx) {
 //    reads, cwd changes, dialog rendering, elicitation, etc.
 // =========================================================================
 
-// Representative subset (see ev-remote.md § CONTROL-REQUEST TYPES for full list):
+// Representative subset (see README.md "The control-request protocol" for the full list):
 //
 //   "mcp_status"            933390  -> mcpServers: On()
 //   "get_binary_version"    933394  -> { version, buildTime }  (used by /version in --remote mode)
@@ -278,7 +278,7 @@ const CronCreateTool = {                      // orig: jNf @ 567488
     // durable crons rejected for teammates ("do not persist across sessions")
   },
   // Auto-expires: recurring jobs auto-expire after `ase` days (constant not
-  // fully traced in this pass — see ev-remote.md UNVERIFIED).
+  // fully traced in this pass — see README.md "Open questions").
 };
 // CronDelete requires ownership match: `n.agentId !== r.agentId` -> rejected
 // (567644-567650) — a cron job can only be cancelled by the agent that owns it.
@@ -310,7 +310,7 @@ const RemoteTriggerTool = {
 
 // =========================================================================
 // 6. GATING — WHEN REMOTE CONTROL IS DISABLED (security-relevant)
-//    See ev-remote.md GATING-CONDITIONS table for the full precedence chain.
+//    See README.md "The gating chain (security)" for the full precedence chain.
 // =========================================================================
 
 function isRemoteControlDisabledByOrgPolicy() {  // orig: Zon()  @ 791227

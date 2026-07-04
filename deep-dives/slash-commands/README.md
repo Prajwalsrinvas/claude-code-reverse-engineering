@@ -25,7 +25,7 @@
 
 When you type `/` in the Claude Code input, an **autocomplete dropdown** appears showing available commands. Here's exactly how it works:
 
-**Source:** `deobfuscated.js:668215` (function `WmA` → renamed `getCommandSuggestions`)
+**Source:** the Fuse index builder is `deobfuscated.js:827041` (function `KMm`); the suggestion-list builder that tags each entry with a `suggestionType` is `deobfuscated.js:829071` (function `ft`). (The 2.1.34-era name for this — `WmA` — no longer applies; all single-token identifiers changed at 2.1.201.)
 
 ```mermaid
 flowchart TD
@@ -111,7 +111,7 @@ function getRecencyScore(usage) {
 {
   id: "compact:local",           // unique identifier
   displayText: "/compact",       // what you see
-  description: "Clear conversation history but keep a summary in context...",
+  description: "Free up context by summarizing the conversation so far",
   metadata: compactCommandObject // the full command object
 }
 ```
@@ -136,22 +136,24 @@ The complete list of commands is built from multiple sources. To get the **full 
 
 ### Source Categories
 
-| Source | Location | How Loaded |
-|--------|----------|------------|
-| **Built-in** | Hardcoded in `QbA` array (line 629929) | Always available |
-| **Bundled skills** | Shipped with Claude Code | `loadSkillDirectories()` |
-| **User skills** | `~/.claude/commands/*.md` | `loadSkillDirectories()` |
-| **Project skills** | `.claude/commands/*.md` | `loadSkillDirectories()` |
-| **Plugin skills** | From installed plugins | `loadSkillDirectories()` |
-| **MCP commands** | From MCP server connections | `loadMcpCommands()` |
-| **Policy commands** | From organization policies | `loadPolicyCommands()` |
-| **Remote commands** | From remote/paired sessions | `getRemoteCommands()` |
+| Source | How Loaded |
+|--------|------------|
+| **Built-in** | Hardcoded command objects, merged in the registry builder `dhr` (`deobfuscated.js:775877`) |
+| **Bundled skills** | Shipped with Claude Code |
+| **User skills** | `~/.claude/skills/*/SKILL.md`, `~/.claude/commands/*.md` |
+| **Project skills** | `.claude/skills/*/SKILL.md`, `.claude/commands/*.md` |
+| **Plugin skills** | From installed plugins |
+| **MCP commands** | From MCP server connections |
+| **Policy commands** | From organization/managed settings |
+| **Remote commands** | From remote/paired sessions |
+
+The merge, dedup, and collision handling are covered in the [skills deep dive](../skills/#skills-vs-built-in-commands).
 
 ### Known Built-in Commands
 
-The built-in registry (`QbA` at line 629929) contains 60+ command objects. Based on the code analysis, the known built-in commands include:
+The `type: "local"`/`"local-jsx"` command objects number roughly **110** in 2.1.201 (37 `local` + 76 `local-jsx`, a few of which aren't user-facing). Known ones include:
 
-- `/compact` — Clear conversation history but keep a summary in context
+- `/compact` — Free up context by summarizing the conversation so far (`deobfuscated.js:647811`)
 - `/clear` (aliases: `reset`, `new`) — Clear conversation history and free up context
 - `/context` — Show current context usage / Visualize context as colored grid
 - `/help` — Show help

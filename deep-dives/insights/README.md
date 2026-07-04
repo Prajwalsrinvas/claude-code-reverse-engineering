@@ -40,7 +40,7 @@ This post documents exactly how that pipeline works, based on reading the source
 
 ## How the source was obtained
 
-Claude Code's CLI implementation is not in the [public GitHub repo](https://github.com/anthropics/claude-code) — that repo only has plugins, examples, and changelogs. The actual code ships as a minified `cli.js` in the npm package and as embedded JavaScript in the Bun standalone binary.
+Claude Code's CLI implementation is not in the [public GitHub repo](https://github.com/anthropics/claude-code) — that repo only has plugins, examples, and changelogs. As of 2.1.201 the code ships only as embedded JavaScript inside the native Bun standalone binary; the npm package no longer contains it.
 
 Three sources were evaluated:
 
@@ -50,7 +50,7 @@ Three sources were evaluated:
 | npm package | `npm pack @anthropic-ai/claude-code` | **No longer contains code** — since v2.1.113 it is a ~170 KB installer that pulls a per-platform native binary |
 | Bun binary | `~/.local/share/claude/versions/2.1.201` (251 MB ELF) | **The only source now.** JS (`cli.js`, 18.7 MB) is embedded in the binary's `.bun` ELF section as plaintext and must be extracted from the module graph |
 
-The primary distribution flipped during this window: the npm `cli.js` that earlier analyses unminified directly no longer exists. The current binary's module graph holds five entries — the `cli.js` bundle, a ~144 MB precompiled Bun bytecode blob (startup speed), and two Rust NAPI addons (`image-processor.node`, `audio-capture.node`). See [SKILL.md](../../skill/SKILL.md) for the extractor.
+The primary distribution flipped during this window: the npm `cli.js` that earlier analyses unminified directly no longer exists. The current binary's module graph emits **five path-table entries** — the `cli.js` bundle, two tiny CJS shims, and two Rust NAPI addons (`image-processor.node`, `audio-capture.node`) — while a large (~144 MB) precompiled Bun bytecode blob for startup speed lives elsewhere in the same `.bun` section (it isn't one of the extracted modules). See [SKILL.md](../../skill/SKILL.md) for the extractor.
 
 Source maps don't exist in the shipped artifact. (Note: a v2.1.88 build briefly published a source map exposing original TypeScript; it was unpublished within a day. This analysis reads the shipped binary, not that leak — and 2.1.88 predates much of what changed by 2.1.201 anyway.)
 

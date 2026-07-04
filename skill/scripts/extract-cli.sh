@@ -35,8 +35,10 @@ for cand in \
     "$HOME/.local/share/claude/versions/$INSTALLED_VERSION" \
     "$(command -v claude 2>/dev/null || true)"; do
     if [[ -n "$cand" && -f "$cand" ]]; then
-        # Skip shell-script shims; we need the actual ELF/Mach-O executable.
-        if file "$cand" 2>/dev/null | grep -qiE 'ELF|Mach-O|executable'; then
+        # Skip shell-script shims; we need the actual ELF/Mach-O binary.
+        # (Don't match "executable" — `file` reports shell scripts as
+        # "shell script ... executable" too, which would defeat the guard.)
+        if file "$cand" 2>/dev/null | grep -qiE 'ELF|Mach-O'; then
             BINARY="$cand"
             break
         fi
@@ -64,6 +66,7 @@ fi
 
 echo "$INSTALLED_VERSION" > "$VERSION_FILE"
 echo "Extracted cli.js ($(du -h "$CLI_PATH" | cut -f1)) for version $INSTALLED_VERSION"
-echo "Also extracted (in $CACHE_DIR/bun-modules): the Bun bytecode siblings and the"
-echo "image-processor / audio-capture Rust NAPI addons."
+echo "Also written to $CACHE_DIR/bun-modules: the two tiny CJS shims and the"
+echo "image-processor / audio-capture Rust NAPI addons. (The ~144 MB Bun bytecode"
+echo "blob lives in the .bun section but is not a path-table module, so it isn't emitted.)"
 echo "Path: $CLI_PATH"

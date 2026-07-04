@@ -47,12 +47,11 @@ The binary is a Bun standalone executable. JavaScript is embedded as **plaintext
 
 Unlike the older end-of-file-append layout that [bun-decompile](https://github.com/lafkpages/bun-decompile/blob/main/src/lib/index.ts) documents, on the current Linux binary the module graph lives in a dedicated **`.bun` ELF section** (`readelf -S`), and the metadata records are **52 bytes** each. `scripts/extract-bun-cli.py` handles this: it takes the `.bun` section bounds as the graph blob, scans the tail for the `/$bunfs/root/...` path table, matches each path to its record (`<flags u32><pathOff u32><pathLen u32><contentsOff u32><contentsLen u32>…`, offsets relative to `blobStart+8`), and writes out each module.
 
-The five modules in the 2.1.201 binary:
+The extractor emits **five path-table modules** from the 2.1.201 binary. (A large ~144 MB precompiled Bun bytecode blob for fast startup also lives in the `.bun` section, but it is *not* one of the path-table entries — the extractor does not write it out.)
 
 | Module | Size | What |
 |--------|------|------|
 | `cli.js` | ~18.7 MB | The entrypoint bundle — unminify this |
-| Bun bytecode blob | ~144 MB | Precompiled bytecode for fast startup |
 | `image-processor.node` | ~1.5 MB | Rust NAPI addon — image resize/encode + clipboard image read |
 | `audio-capture.node` | ~0.5 MB | Rust NAPI addon — voice/dictation capture |
 | `image-processor.js` / `audio-capture.js` | ~2 KB each | Tiny CJS shims that `require` the `.node` addons |
@@ -90,7 +89,7 @@ getAllCommands(mcpClients) =
   + mcpCommands          (from MCP server connections)
   + pluginSkills         (from installed plugins)
   + policyCommands       (from organization policies)
-  + builtinCommands      (hardcoded ~60+ commands)
+  + builtinCommands      (hardcoded ~110 commands: 37 type:"local" + 76 type:"local-jsx")
   + remoteCommands       (from remote/paired sessions, inserted before built-ins)
 ```
 
@@ -148,7 +147,7 @@ String literals survive minification perfectly and are the fastest way to jump t
 | `/context` | grid glyphs `⛁ ⛀ ⛶ ⛝`, `"MCP tools (deferred)"`, `get_context_usage` |
 | Slash-command menu | Fuse keys `commandName`/`displayName`/`aliasKey`, `threshold: 0.3` |
 | Skills | `SKILL.md`, `.claude/skills`, `allowed-tools`, `disallowed-tools`, `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS` |
-| Agents / Workflows | `subagent_type`, `SendMessage`, `run_in_background`, `ultracode`, `/workflows`; note `TeamCreate`/`TeamDelete` are **absent** (removed 2.1.178) |
+| Agents / Workflows | `subagent_type`, `SendMessage`, `run_in_background`, `ultracode`, `/workflows`; note `TeamCreate`/`TeamDelete` are **absent as live tools** (removed 2.1.178 — the strings survive only in a legacy-compat Set) |
 | Caching / context-eng | `cache_control`, `ephemeral`, `ENABLE_PROMPT_CACHING_1H`, `ToolSearch`, `<system-reminder>` |
 | Remote control | `thinClientDispatch`, `control-request`, `get_context_usage`, poll-interval constants |
 

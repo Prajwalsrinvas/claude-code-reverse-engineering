@@ -1,6 +1,6 @@
 // ============================================================================
 // Claude Code — Context engineering & prompt caching — annotated extraction
-// Source: Claude Code npm package v2.1.201, webcrack --no-jsx + prettier
+// Source: Claude Code v2.1.201 (extracted from the native Bun binary), webcrack --no-jsx + prettier
 // Date extracted: 2026-07-04
 //
 // This is a NEW deep dive (no prior version to diff against). Scope: how
@@ -12,7 +12,7 @@
 // Every renamed symbol carries a `// deobfuscated.js:NNNNN` line reference to
 // the original. Renames are inferred from string literals, telemetry event
 // names, and call-site usage; anything not fully certain is flagged
-// `/* uncertain */`. Full evidence + line cites: see ev-ctxeng.md.
+// `/* uncertain */`. Full evidence + line cites are in the companion README.md.
 //
 // LIVE CONFIRMATION: this agent's own harness system prompt (visible at the
 // top of its transcript) is a byte-for-byte match for the "lean" prompt

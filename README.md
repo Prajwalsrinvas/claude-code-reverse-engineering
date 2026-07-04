@@ -25,7 +25,7 @@ All deep dives were refreshed against **Claude Code v2.1.201** (analyzed with Cl
 
 | Subsystem | What it covers | Deep dive |
 |-----------|----------------|----------|
-| **Skills** | How SKILL.md skills are discovered, parsed, merged, and invoked — the single `Skill` tool, the five-source registry, contextual loading, stacked invocation, inline vs fork | [deep-dives/skills/](deep-dives/skills/) |
+| **Skills** | How SKILL.md skills are discovered, parsed, merged, and invoked — the single `Skill` tool, the multi-source registry, contextual loading, stacked invocation, inline vs fork | [deep-dives/skills/](deep-dives/skills/) |
 | **Agents & Workflows** | The multi-agent runtime: the Agent/Task tool, background-by-default subagents, the implicit team + SendMessage, the agent authority model, depth caps, and the Dynamic Workflows engine | [deep-dives/agents-and-workflows/](deep-dives/agents-and-workflows/) |
 | **Context engineering & caching** | Cache breakpoints, the cross-customer "global" cache scope, the lean system prompt, ToolSearch deferral, TTL selection, and the cache-preserving tricks (`/cd`, date-as-reminder) | [deep-dives/context-engineering/](deep-dives/context-engineering/) |
 | **Remote control** | The two bridges (WebSocket REPL + HTTP worker), the control-request protocol, poll timing, push notifications, scheduling, Teleport, and the 10-condition gating chain | [deep-dives/remote-control/](deep-dives/remote-control/) |

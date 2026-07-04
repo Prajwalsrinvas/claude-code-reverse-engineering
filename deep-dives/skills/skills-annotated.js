@@ -1,6 +1,6 @@
 // ============================================================================
 // Claude Code Skills system — annotated extraction
-// Source: Claude Code npm package v2.1.201, webcrack --no-jsx + prettier
+// Source: Claude Code v2.1.201 (extracted from the native Bun binary), webcrack --no-jsx + prettier
 // Date extracted: 2026-07-04
 //
 // Identifiers below are RENAMED from the mangled source for readability.
@@ -8,7 +8,7 @@
 // the original. Renames are inferred from string literals, telemetry event
 // names, Zod schema .describe() text, and call-site usage; anything not
 // fully certain is flagged `/* uncertain */`. Full evidence + line-cited
-// excerpts: see ev-skills.md (built alongside this file).
+// excerpts are in the companion README.md.
 //
 // SCOPE: loading, frontmatter parsing, nested/contextual discovery, name-
 // collision handling, the Skill tool, and the disableBundledSkills /

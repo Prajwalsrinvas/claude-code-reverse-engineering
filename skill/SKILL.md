@@ -19,7 +19,7 @@ Reverse engineer a specific feature in Claude Code's source code.
 
 Create these tasks at the start:
 
-1. **Acquire source** — Download and extract cli.js from npm
+1. **Acquire source** — Extract cli.js from the installed native Bun binary
 2. **Unminify** — Run webcrack + prettier to produce readable source
 3. **Locate the feature** — Search for anchor strings to find the code
 4. **Extract & annotate** — Pull out the feature's code, rename identifiers inline
@@ -41,7 +41,7 @@ bash ~/.claude/skills/analyze-cc-feature/scripts/extract-cli.sh
 
 **Important — the source is no longer in the npm package.** Since v2.1.113 the npm package (`@anthropic-ai/claude-code`) is a ~170 KB thin installer; the real CLI ships as a per-platform native **Bun standalone executable** (~250 MB) with the JavaScript embedded in its module graph. `extract-cli.sh` locates the installed binary (`~/.local/share/claude/versions/<version>` or `$(which claude)`) and runs `scripts/extract-bun-cli.py` to pull `cli.js` out of the binary's module graph. It also drops the sibling modules (a precompiled Bun bytecode blob and two Rust NAPI addons — `image-processor.node`, `audio-capture.node`) into `/tmp/claude-code-npm/bun-modules/`.
 
-This produces `/tmp/claude-code-npm/package/cli.js` (~18 MB). See [REFERENCE.md](REFERENCE.md#bun-binary-format) for the binary format details if you need to adapt the extractor to a new layout.
+This produces `/tmp/claude-code-npm/package/cli.js` (~18 MB). See [REFERENCE.md](REFERENCE.md#bun-binary-format-current-layout) for the binary format details if you need to adapt the extractor to a new layout.
 
 ### Step 2: Unminify
 
