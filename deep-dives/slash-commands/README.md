@@ -1,9 +1,11 @@
 # How Claude Code's Slash Command Menu Works
 
-> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
-> **Date:** 2026-02-07\
-> **Source:** Claude Code npm package, unminified with webcrack + prettier\
+> **Analysis model:** Claude Fable 5 (`claude-fable-5`) via Claude Code CLI\
+> **Date:** 2026-07-04\
+> **Source:** Claude Code v2.1.201, extracted from the Bun standalone binary, unminified with webcrack (`--no-jsx`) + prettier\
 > **Annotated source:** Reuses code extracted in [`compact-annotated.js`](../compact/compact-annotated.js) (command registry, dispatch, autocomplete)
+
+> **What changed since 2.1.34:** The Fuse.js search gained two "display" keys (`displayName` weight 2, `displayPartKey` weight 1) to handle namespaced skill/plugin commands whose shown name differs from their internal name. Recency scoring is unchanged (7-day half-life). The bigger shift is in the registry: many former built-in commands are now **bundled skills** — `/code-review` and `/simplify` no longer exist as built-in command objects (only `/review` does), and clicking a menu item now **fills the prompt** rather than executing immediately. See [How this evolved](#how-this-evolved-since-2134).
 
 ## Table of Contents
 
@@ -61,16 +63,18 @@ All **visible** (non-hidden) commands are shown, sorted in this order:
 
 ## When You Type `/com` (Partial Match)
 
-**Fuse.js** fuzzy search kicks in with these weights:
+**Fuse.js** fuzzy search kicks in with these weights (`deobfuscated.js:827060`, threshold `0.3`, `location: 0`, `distance: 100`):
 
 | Search Field | Weight | Example |
 |-------------|--------|---------|
 | `commandName` | 3 | "compact" matches "/compact" |
+| `displayName` | 2 | **new** — the shown name (differs from internal name for namespaced skill/plugin commands) |
 | `partKey` (hyphenated parts) | 2 | "review" matches "/review-pr" |
 | `aliasKey` | 2 | "reset" matches "/clear" (alias) |
+| `displayPartKey` | 1 | **new** — hyphenated parts of the display name |
 | `descriptionKey` | 0.5 | "summary" matches "/compact" (description mentions it) |
 
-Results are sorted by:
+The two `display*` keys were added because a growing share of commands are skills and plugin commands whose menu label (e.g. `plugin:skill`) is not the same string as their internal `commandName`. Results are sorted by:
 1. Exact name match
 2. Exact alias match
 3. Name starts with search term
@@ -82,11 +86,10 @@ Results are sorted by:
 
 ## Recency Scoring
 
-**Source:** `deobfuscated.js:466951`
+**Source:** `deobfuscated.js:427625-427636` — unchanged algorithm from 2.1.34:
 
 ```js
-function getRecencyScore(commandName) {
-  let usage = getSettings().skillUsage?.[commandName];
+function getRecencyScore(usage) {
   if (!usage) return 0;
   let daysSinceLastUse = (Date.now() - usage.lastUsedAt) / 86400000;
   let decayFactor = Math.pow(0.5, daysSinceLastUse / 7); // half-life = 7 days
@@ -97,6 +100,8 @@ function getRecencyScore(commandName) {
 - Each command's usage is tracked: `{ usageCount, lastUsedAt }`
 - Score = `usageCount * decay` where decay halves every 7 days
 - Minimum decay factor: 0.1 (commands never fully disappear)
+
+(There is a second, structurally identical decay at `deobfuscated.js:666925/666953` used elsewhere with a `q7l`-day half-life constant rather than a hardcoded 7 — worth noting if you're re-locating this, since the two look alike.)
 
 ---
 
@@ -157,6 +162,10 @@ The built-in registry (`QbA` at line 629929) contains 60+ command objects. Based
 
 Commands can also be **hidden** (`isHidden: true`) — these exist but don't appear in the autocomplete menu. They're still invocable if you type the full name.
 
+### Commands that became skills
+
+A number of things that read like built-in commands are now **bundled skills** loaded from `SKILL.md`, not entries in the built-in registry. Verified in 2.1.201 source: `name: "code-review"` and `name: "simplify"` do **not** exist as command objects — only `name: "review"` (the GitHub-PR review) survives as a built-in. `code-review` and `simplify` appear only as skill-name strings. This tracks the changelog history: `/simplify` was renamed `/code-review` (2.1.147), then `/simplify` came back as a separate cleanup-only skill (2.1.152), and both settled as skills rather than hardcoded commands. The practical upshot: the built-in registry shrank as the skills system absorbed feature-commands (see the [Skills deep dive](../skills/)).
+
 ---
 
 ## Command Registry Architecture
@@ -173,4 +182,19 @@ See [skill/REFERENCE.md](../../skill/REFERENCE.md#command-registry-architecture)
 |----------|-------|---------|
 | Fuse.js threshold | 0.3 | Fuzzy match threshold for command search |
 | Recency half-life | 7 days | How quickly command recency decays |
+| Min decay factor | 0.1 | Floor so used commands never fully disappear |
 | Max recent commands | 5 | Top recently-used commands shown |
+
+---
+
+## How this evolved since 2.1.34
+
+| Change | Detail |
+|--------|--------|
+| **Fuse keys expanded** | Added `displayName` (weight 2) and `displayPartKey` (weight 1) so namespaced skill/plugin commands match on their shown label, not just their internal name. Weights otherwise unchanged; threshold still 0.3. |
+| **Recency unchanged** | `usageCount × max(0.5^(days/7), 0.1)` — identical. |
+| **Feature-commands became skills** | `/code-review` and `/simplify` are bundled skills now, not built-ins; only `/review` remains a built-in command object. The built-in registry shrank as skills absorbed feature-commands. |
+| **Click-to-fill** | Clicking a slash command in the menu fills the prompt input instead of executing immediately (changelog 2.1.162) — a deliberate guard against accidentally firing a command with one click. |
+| **More registry sources** | Plugin skills, policy commands, and remote/paired-session commands are all first-class sources in the merge now (see [Command Registry Architecture](#command-registry-architecture)). |
+
+The direction: the menu stopped being a fixed list of hardcoded commands and became a ranking surface over a heterogeneous, mostly-skill-driven registry — which is why the search had to learn about display names and why clicking got safer.

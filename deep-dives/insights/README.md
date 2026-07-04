@@ -1,9 +1,12 @@
 # How Claude Code's `/insights` Command Works
 
-> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
-> **Date:** 2026-02-07\
-> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier\
-> **Annotated files:** `insights-annotated.js`
+> **Analysis model:** Claude Fable 5 (`claude-fable-5`) via Claude Code CLI\
+> **Date:** 2026-07-04\
+> **Source:** Claude Code v2.1.201, extracted from the Bun standalone binary, unminified with webcrack (`--no-jsx`) + prettier\
+> **Annotated files:** `insights-annotated.js`\
+> **Module:** `deobfuscated.js:772760–775096` (build `2.1.201`, git `5bb45156`, built `2026-07-03`)
+
+> **Note on the source:** As of v2.1.113 the npm package no longer ships `cli.js` — it is a thin installer that downloads a per-platform native binary. The JavaScript is now embedded in that Bun standalone executable and must be extracted from its module graph before unminifying. See [SKILL.md](../../skill/SKILL.md) for the current extraction procedure. The pipeline logic below is otherwise stable from the 2.1.34 baseline; see [How this evolved](#how-this-evolved-since-2134) for what changed.
 
 Claude Code ships with a `/insights` command that analyzes your past sessions and generates an HTML report about how you use it — what you work on, where things go wrong, what to try next. It's one of the more unusual features in an AI coding tool: the AI reads its own session logs, has another AI extract structured data from each one, aggregates the results, then has yet another set of AI calls write narrative sections about your usage patterns.
 
@@ -44,18 +47,18 @@ Three sources were evaluated:
 | Source | Location | Usable? |
 |--------|----------|---------|
 | GitHub repo | `anthropics/claude-code` | No CLI source |
-| Bun binary | `~/.local/share/claude/versions/2.1.34` (212 MB ELF) | JS is embedded as plaintext, extractable but harder to work with |
-| npm package | `npm pack @anthropic-ai/claude-code` → `cli.js` (11 MB) | Same code, easiest to work with |
+| npm package | `npm pack @anthropic-ai/claude-code` | **No longer contains code** — since v2.1.113 it is a ~170 KB installer that pulls a per-platform native binary |
+| Bun binary | `~/.local/share/claude/versions/2.1.201` (251 MB ELF) | **The only source now.** JS (`cli.js`, 18.7 MB) is embedded in the binary's `.bun` ELF section as plaintext and must be extracted from the module graph |
 
-The npm and Bun sources were verified to contain identical logic by matching 21 key string literals (prompts, field names, labels, token limits) across both.
+The primary distribution flipped during this window: the npm `cli.js` that earlier analyses unminified directly no longer exists. The current binary's module graph holds five entries — the `cli.js` bundle, a ~144 MB precompiled Bun bytecode blob (startup speed), and two Rust NAPI addons (`image-processor.node`, `audio-capture.node`). See [SKILL.md](../../skill/SKILL.md) for the extractor.
 
-Source maps don't exist — checked across multiple npm versions (0.2.9 through 2.1.34), the Bun binary, and early releases. Original variable names are not recoverable.
+Source maps don't exist in the shipped artifact. (Note: a v2.1.88 build briefly published a source map exposing original TypeScript; it was unpublished within a day. This analysis reads the shipped binary, not that leak — and 2.1.88 predates much of what changed by 2.1.201 anyway.)
 
 ### Unminification
 
-[webcrack](https://github.com/j4k0xb/webcrack) handled syntax transforms (`!0` → `true`, comma sequences → separate statements, ternaries → if-else, etc.) followed by [Prettier](https://github.com/prettier/prettier) for formatting. The result: 7,588 minified lines became 712,643 readable lines.
+[webcrack](https://github.com/j4k0xb/webcrack) handled syntax transforms (`!0` → `true`, comma sequences → separate statements, ternaries → if-else, etc.) followed by [Prettier](https://github.com/prettier/prettier) for formatting. The result: the 18.7 MB `cli.js` became **965,378 readable lines**. (webcrack's JSX-decompile pass is run with `--no-jsx` — on today's bundle it takes ~50 min and produces output Prettier can't reparse; disabling it costs only verbose `createElement` calls, which are mechanical to read.)
 
-Variable names remain mangled (`Gqz`, `Wqz`, `bwq`), but all logic, string literals, and prompts are perfectly readable. The ~2,200-line insights module was then extracted, identifiers renamed based on usage context and string evidence (adopting the technique from [humanify](https://github.com/jehna/humanify)), and the result analyzed against actual output from a real `/insights` run.
+Variable names remain mangled, but all logic, string literals, and prompts are perfectly readable. The ~2,337-line insights module (`deobfuscated.js:772760–775096`) was extracted, identifiers renamed based on usage context and string evidence, and the result cross-checked against actual `/insights` output.
 
 ---
 
@@ -92,31 +95,29 @@ Three types of LLM calls, all using the same model:
 
 | Call Type | Function | Model | Max Output Tokens | Count per Run |
 |-----------|----------|-------|-------------------|---------------|
-| Chunk summarization | `summarizeChunk` | Opus* | 500 | 0–N (only for long sessions) |
-| Facet extraction | `extractFacets` | Opus* | 4,096 | 0–50 (only uncached sessions) |
-| Narrative generation | `generateNarrativeSection` | Opus* | 8,192 | 8 (7 parallel + 1 sequential) |
+| Chunk summarization | `summarizeChunk` | Opus 4.8* | 500 | 0–N (only for long sessions) |
+| Facet extraction | `extractFacets` | Opus 4.8* | 4,096 | 0–50 (only uncached sessions) |
+| Narrative generation | `generateNarrativeSection` | Opus 4.8* | 8,192 | 8 (7 parallel + 1 sequential) |
 
-*\*For Anthropic first-party users: `claude-opus-4-6`. For Bedrock/Vertex: `claude-opus-4-1-20250805`. Overridable via `ANTHROPIC_DEFAULT_OPUS_MODEL` env var.*
+*\*`claude-opus-4-8` on every provider (first-party, Bedrock `us.anthropic.claude-opus-4-8`, Vertex, Foundry, anthropic_aws). Overridable via `ANTHROPIC_DEFAULT_OPUS_MODEL`.*
 
-Both model selector functions (`getFacetModel` and `getNarrativeModel` in the renamed code) are thin wrappers around the same `getOpusModel()` resolver:
+Both selector functions are thin wrappers around the same **Opus-tier** resolver. This is worth stating explicitly: over the 2.1.34→2.1.201 window Claude Code gained a Fable 5 model (`claude-fable-5`, resolved by a separate `ANTHROPIC_DEFAULT_FABLE_MODEL` tier used by the background classifier and auto-mode), but `/insights` still calls the **opus** resolver in both wrappers — so it rides the latest rung of the Opus line, not Fable. The resolver reads `ANTHROPIC_DEFAULT_OPUS_MODEL` first, then falls back to the `opus48` entry in the model registry:
 
 ```javascript
-function getFacetModel() {
-  return getOpusModel();
-}
-function getNarrativeModel() {
-  return getOpusModel();
-}
-
-// getOpusModel() at line 167358:
-function getOpusModel() {
-  if (process.env.ANTHROPIC_DEFAULT_OPUS_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-  }
-  if (getProvider() === "firstParty") {
-    return getModelConfig().opus46;  // "claude-opus-4-6"
-  }
-  return getModelConfig().opus41;    // "claude-opus-4-1-20250805"
+// Both wrappers → the same opus resolver → registry.opus48
+// registry entry (deobfuscated.js:119571):
+{
+  id: "claude-opus-4-8",
+  family: "opus",
+  display_name: "Opus 4.8",
+  provider_ids: {
+    first_party: "claude-opus-4-8",
+    bedrock: "us.anthropic.claude-opus-4-8",
+    vertex: "claude-opus-4-8",
+    foundry: "claude-opus-4-8",
+    anthropic_aws: "claude-opus-4-8",  // new provider since 2.1.34
+    // ...mantle, gateway
+  },
 }
 ```
 
@@ -235,18 +236,22 @@ This is pure computation — no LLM calls. The output is a flat metadata object 
 
 This is where the LLM enters the picture. For each session, the pipeline asks Opus to read the transcript and extract structured "facets" — a JSON object describing the session's goals, outcomes, friction, and satisfaction.
 
-**Caching**: Before making any LLM calls, the pipeline checks for cached facets on disk. Only sessions without cached facets get sent to the LLM, up to a maximum of **50 new sessions per run**:
+**Caching**: Before making any LLM calls, the pipeline checks for cached facets on disk. Only sessions without cached facets get sent to the LLM. The "50 per run" cap is really **three separate limits** in the report generator (`deobfuscated.js:774504–774650`), which is a more accurate picture than the single `MAX_EXTRACT = 50` the earlier writeup described:
+
+| Limit | Value | Governs |
+|-------|-------|---------|
+| Uncached-transcript load ceiling | 200 | How many uncached sessions get their transcripts loaded from disk at all |
+| Facet-extraction LLM-call cap | 50 | Hard ceiling on *new* facet-extraction LLM calls in one run |
+| Parallel batch size | 50 | How many extractions are dispatched concurrently |
+
+Cached-facet sessions bypass all three. The net effect is unchanged from the old description — a cold history extracts 50 sessions per run and warms incrementally — but the internal structure is three constants, not one.
 
 ```javascript
-let MAX_EXTRACT = 50;
+// simplified — the real code (774631) gates on the 50-call cap:
 for (let { log: session, meta: entry } of substantial) {
-  let sid = entry.session_id;
-  let cached = readCachedFacets(sid);
-  if (cached) {
-    facetsMap.set(sid, cached);
-  } else if (toExtract.length < MAX_EXTRACT) {
-    toExtract.push({ log: session, sessionId: sid });
-  }
+  let cached = readCachedFacets(entry.session_id);
+  if (cached) facetsMap.set(entry.session_id, cached);
+  else if (toExtract.length < 50) toExtract.push({ log: session, sessionId: entry.session_id });
 }
 ```
 
@@ -675,6 +680,8 @@ File extensions are mapped to languages:
 | `.go` | Go |
 | `.rs` | Rust |
 | `.java` | Java |
+| `.c`, `.h` | C |
+| `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.ipp` | C++ |
 | `.md` | Markdown |
 | `.json` | JSON |
 | `.yaml`, `.yml` | YAML |
@@ -699,6 +706,24 @@ Sessions are read from `~/.claude/projects/` (the standard session storage locat
 
 ---
 
+## How this evolved since 2.1.34
+
+The `/insights` pipeline is remarkably stable — 10 of the 11 major claims from the 2.1.34 analysis hold verbatim in 2.1.201 (same pipeline shape, same three LLM call types with identical 500/4096/8192 token limits, same facet schema, same 30-minute multi-clauding window, same hardcoded-empty Team Feedback section). What changed:
+
+| Change | Detail |
+|--------|--------|
+| **Model bumped** | `claude-opus-4-6` → `claude-opus-4-8` for all three call types. Did **not** move to Fable 5, despite Fable 5 shipping in this window — `/insights` explicitly calls the Opus-tier resolver. |
+| **New providers in the registry** | `anthropic_aws`, `mantle`, and `gateway` provider IDs now exist alongside first-party/Bedrock/Vertex/Foundry. |
+| **Language map gained C/C++** | `.c`/`.h` → C and seven C++ extensions (`.cpp`/`.cc`/`.cxx`/`.hpp`/`.hh`/`.hxx`/`.ipp`) were added. Everything else in the taxonomy is unchanged. |
+| **Extraction cap is 3 constants** | The "50 per run" is now a 50-call LLM cap + 200-transcript load ceiling + 50 batch size (see [Extract facets](#4-extract-facets-llm-powered)). |
+| **Distribution flipped** | The npm `cli.js` this feature was first read from no longer exists; the code now ships inside the native Bun binary (v2.1.113). |
+
+**Vestigial / dead code worth noting** (present in 2.1.201, doing nothing):
+
+- **`user_instructions_to_claude`** — the At-a-Glance prompt builder references this field on each facet, but it is not in the facet schema and never gets set, so it always renders "None captured." An unfinished or leftover prompt field.
+- **`...[]` empty spread** — spliced into the narrative-section list between `on_the_horizon` and `fun_ending`. A no-op today; the shape implies a conditionally-included or removed 8th section (mirrors the empty Team Feedback section, which also survives only as a nav link).
+- **Remote-host collection** — `collectRemote` / `remoteStats` / `remote_hosts_collected` are wired through function signatures, but the caller hardcodes `collectRemote: false` and the report generator never reads the flag. `remoteStats` is always `undefined`.
+
 ## Reproducing this analysis
 
 This process can be applied to any Claude Code feature. The methodology is packaged as a reusable [Claude Code skill](../../skill/) with automation scripts — see the [root README](../../README.md#how-the-source-is-obtained) for the general process and [SKILL.md](../../skill/SKILL.md) for the full 7-step pipeline.
@@ -713,7 +738,7 @@ This process can be applied to any Claude Code feature. The methodology is packa
 |------|--------|---------------|
 | [webcrack](https://github.com/j4k0xb/webcrack) | j4k0xb | Syntax unminification |
 | [Prettier](https://github.com/prettier/prettier) | Prettier team | Code formatting |
-| [bun-decompile](https://github.com/lafkpages/bun-decompile) | lafkpages | Understood Bun binary format |
+| [bun-decompile](https://github.com/lafkpages/bun-decompile) | lafkpages | Reference for the Bun binary module-graph format (the extractor was re-derived for the current `.bun`-section layout) |
 | [humanify](https://github.com/jehna/humanify) | jehna | Adopted LLM rename technique |
 | [wakaru](https://github.com/pionxzh/wakaru) | pionxzh | Evaluated, not used |
 
@@ -725,4 +750,4 @@ See the full list in [skill/REFERENCE.md](../../skill/REFERENCE.md#prior-art).
 
 | File | What |
 |------|------|
-| `../webcrack-output/deobfuscated.js` | Full unminified CLI (712,643 lines) — not included in repo (17 MB); reproduce via [How the source is obtained](../../README.md#how-the-source-is-obtained) |
+| `../webcrack-output/deobfuscated.js` | Full unminified CLI (965,378 lines, 27 MB) — not included in repo; reproduce via [How the source is obtained](../../README.md#how-the-source-is-obtained) |

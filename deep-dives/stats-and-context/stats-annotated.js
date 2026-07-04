@@ -1,65 +1,172 @@
 // =============================================================================
-// /stats Command — Annotated Source
-// Source: Claude Code v2.1.34 (deobfuscated.js)
+// /stats (now /usage) Command — Annotated Source
+// Source: Claude Code v2.1.201 (deobfuscated.js, 2026-07-04)
+// Supersedes the v2.1.34 analysis in this same file.
 // =============================================================================
 //
-// Command type: local-jsx (renders React/Ink UI)
-// Entry: /stats → StatsModule.call → renderStatsDialog()
+// REALITY CHECK (do this first): /stats was NOT removed and its guts were NOT
+// folded into /usage's cost logic. Instead, "stats", "cost", and "usage" are
+// now three aliases of ONE command (name: "usage", aliases: ["cost","stats"])
+// that opens the same Settings-style modal (rFe / deobfuscated.js:664446) with
+// a defaultTab of "Stats" or "Usage" depending on which alias was typed:
 //
-// The /stats command shows historical usage statistics aggregated from session
-// JSONL files stored on disk. It has two tabs: "Overview" (activity heatmap,
-// streaks, session counts) and "Models" (per-model token breakdown chart).
+//   defaultTab: r === "stats" ? "Stats" : "Usage"      (deobfuscated.js:730018)
 //
-// Data is loaded from ~/.claude/projects/*/*.jsonl session files, with a
-// stats-cache.json file for incremental computation.
+// The modal (title "Settings dialog dismissed" on Esc) has 4 tabs: Status,
+// Config, Usage, Stats. The "Stats" tab is exactly the old /stats content
+// (heatmap, streaks, fun facts, Overview/Models sub-tabs) — it did not go
+// anywhere, it is just reached through /usage's alias plumbing now. The old
+// analysis's framing ("stats" is its own top-level jsx command) is CHANGED in
+// form but not in substance: same UI, reached one alias-hop differently.
+//
+// There are still two runtime variants, gated by mr() = !isInteractive():
+//   - local-jsx variant (name:"usage", immediate:true, thinClientDispatch:
+//     "control-request") — used in the interactive TUI. deobfuscated.js:730166-730184
+//   - local variant (name:"usage", supportsNonInteractive:true, isHidden when
+//     interactive) — markdown/text output for `claude -p` / piped mode, folds
+//     in cost + plan usage + "what's contributing to your limits" behaviors.
+//     deobfuscated.js:730185-730199
 // =============================================================================
 
-// ─── Command Definition ─────────────────────────────────────────────────────
-// deobfuscated.js:627471-627487
+// ─── Command Definitions ────────────────────────────────────────────────────
+// deobfuscated.js:730166-730200
 
-var statsCommand = {
+var usageJSXCommand = {
   type: "local-jsx",
-  name: "stats",
-  description: "Show your Claude Code usage statistics and activity",
-  isEnabled: () => true,
-  isHidden: false,
+  name: "usage",
+  aliases: ["cost", "stats"],
+  description: "Show session cost, plan usage, and activity stats",
+  thinClientDispatch: "control-request",
+  immediate: true,
+  requires: { ink: true },
   load: () =>
     Promise.resolve().then(() => {
-      initStatsModule();
-      return StatsModule;
+      initSettingsModalModule();
+      return SettingsModalModule;
     }),
-  userFacingName() {
-    return "stats";
+};
+
+var usageTextCommand = {
+  type: "local",
+  name: "usage",
+  aliases: ["cost", "stats"],
+  supportsNonInteractive: true,
+  description: "Show session cost, plan usage, and what's contributing to your limits",
+  isEnabled: () => isNonInteractive(), // mr()
+  get isHidden() {
+    return !isNonInteractive();
   },
+  load: () =>
+    Promise.resolve().then(() => {
+      initUsageTextModule();
+      return UsageTextModule;
+    }),
 };
 
-// ─── Module Export ───────────────────────────────────────────────────────────
-// deobfuscated.js:627454-627463
+// The dispatcher that picks the modal's starting tab from which alias fired.
+// deobfuscated.js:730010-730023
+var SettingsModalModule = {};
+uA(SettingsModalModule, { call: () => openSettingsModal });
 
-var StatsModule = {};
-uA(StatsModule, {
-  call: () => renderStatsDialog,
-});
-
-var renderStatsDialog = async (onClose) => {
-  return React.createElement(StatsDialogWrapper, {
-    onClose: onClose,
+var openSettingsModal = async (onClose, context, /* toolUseContext */ _t, aliasUsed) =>
+  React.createElement(SettingsDialog, {
+    onClose,
+    context,
+    defaultTab: aliasUsed === "stats" ? "Stats" : "Usage",
   });
-};
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-// deobfuscated.js:627307-627452
+// ─── Settings Dialog Shell — 4 tabs: Status / Config / Usage / Stats ───────
+// deobfuscated.js:664446-664565 (rFe)
+//
+// Tab order in the JSX children array is [Status, Config, Usage, Stats]. The
+// "Stats" tab (title: "Stats") renders <StatsTabContent onClose /> — this is
+// the direct continuation of what v2.1.34 called the whole /stats command.
+function SettingsDialog({ onClose, context, defaultTab }) {
+  // ...header/close-confirmation wiring omitted (unchanged shell)...
+  return TabbedPane({
+    tabs: [
+      { title: "Status", children: StatusTab({ context }) },
+      { title: "Config", children: ConfigTab({ context, onClose }) },
+      { title: "Usage", children: UsageTabContent() }, // deobfuscated.js:664533-664536 (bYl)
+      { title: "Stats", children: StatsTabContent({ onClose }) }, // deobfuscated.js:664543-664548 (XYl)
+    ],
+  });
+}
+
+// ─── Stats Tab Content ──────────────────────────────────────────────────────
+// deobfuscated.js:663019-663085 (XYl)
+
+function StatsTabContent({ onClose }) {
+  let allTimePromise = loadAllTimeStatsWithCache(); // qJf — kicked off once, cached in useState
+  let activeTimePromise = loadActiveTimeStats(); // zJf
+  return Suspense(
+    { fallback: "Loading your Claude Code stats…" },
+    StatsBody({ allTimePromise, activeTimePromise, onClose }),
+  );
+}
+
+// ─── Stats Body: date-range switch, tabs, key handling ─────────────────────
+// deobfuscated.js:663086-663394 (KJf)
+//
+// Sub-tabs: "Overview" (deobfuscated.js:663300, YJf) and "Models"
+// (deobfuscated.js:663321, QJf) — UNCHANGED from v2.1.34 (same two tab names).
+//
+// Key handling (deobfuscated.js:663178-663193):
+//   up          -> focus the outer tab header ("stats" vs "tabs" navigation)
+//   r           -> cycle the date range (see TIME_PERIODS below)
+//   ctrl+s      -> export current tab as a copied screenshot (see below).
+//                  NOTE: no longer mac-only (see "Copy/Export" section).
+// Footer hint text (deobfuscated.js:663360-663369):
+//   "↓ stats" / "↑ tabs" · "r to cycle dates" · "ctrl+s to copy"
+// — the old claim of a bare "Esc" hint and a mac-only ctrl+s annotation is
+// GONE; the hint string itself carries no platform qualifier anymore because
+// the copy path now works cross-platform (see below).
+
+function StatsBody({ allTimePromise, activeTimePromise, onClose }) {
+  let [dateRange, setDateRange] = useState("all"); // a / l
+  let [rangeCache, setRangeCache] = useState({});   // u / d — per-range fetch cache
+  let [selectedTab, setSelectedTab] = useState("Overview"); // m / g
+
+  function onKeyDown(key) {
+    if (key.up) { focusHeader(); return; }
+    if (key.r && !key.ctrl && !key.meta) {
+      setDateRange(cycleDateRange(dateRange)); // WJf
+      return;
+    }
+    if (key.ctrl && key.s) {
+      copyStatsScreenshot(currentStats, activeTimeStats, selectedTab, setStatusMessage, clock); // sQf
+    }
+  }
+  // ...
+}
+
+// ─── Date Range Cycling ─────────────────────────────────────────────────────
+// deobfuscated.js:664324-664329
 
 var TIME_PERIOD_LABELS = {
   "7d": "Last 7 days",
   "30d": "Last 30 days",
   all: "All time",
 };
+var TIME_PERIODS = ["all", "7d", "30d"]; // cycle order for 'r' key — UNCHANGED
 
-var TIME_PERIODS = ["all", "7d", "30d"]; // Cycle order for 'r' key
+// ─── Copy / Export (ctrl+s) — CHANGED: no longer mac-only ──────────────────
+// deobfuscated.js:664193-664220 (sQf/iQf) build the text/asciichart export and
+// append a right-aligned "/stats" watermark; deobfuscated.js:662294-662337
+// (FYl/OJf) render it to a PNG screenshot and push it to the OS clipboard:
+//
+//   macOS:   osascript -e 'set the clipboard to (read (POSIX file ...))'
+//   Linux:   xclip -selection clipboard -t image/png -i <file>   (NEW)
+//   Windows: powershell -Command "[System.Windows.Forms.Clipboard]::SetImage(...)" (NEW)
+//   other:   { success: false, message: "... not supported on <platform>" }
+//
+// deobfuscated.js:662356-662388. The v2.1.34 doc's "Ctrl+S (mac only)" claim
+// is CHANGED — Linux and Windows clipboard-image paths now exist alongside
+// the original AppleScript path.
 
-// Fun comparisons for token counts — "You've used ~Nx more tokens than <book>"
-// deobfuscated.js:627313-627410
+// ─── Fun Facts: Book & Duration Comparisons — CONFIRMED unchanged ──────────
+// deobfuscated.js:664341-664444
+
 var TOKEN_COMPARISONS = [
   { name: "The Little Prince", tokens: 22000 },
   { name: "The Old Man and the Sea", tokens: 35000 },
@@ -85,10 +192,8 @@ var TOKEN_COMPARISONS = [
   { name: "The Count of Monte Cristo", tokens: 603000 },
   { name: "Les Misérables", tokens: 689000 },
   { name: "War and Peace", tokens: 730000 },
-];
+]; // 24 books, exact match to v2.1.34
 
-// Fun comparisons for session duration
-// deobfuscated.js:627411-627452
 var DURATION_COMPARISONS = [
   { name: "a TED talk", minutes: 18 },
   { name: "an episode of The Office", minutes: 22 },
@@ -100,503 +205,34 @@ var DURATION_COMPARISONS = [
   { name: "watching Titanic", minutes: 195 },
   { name: "a transatlantic flight", minutes: 420 },
   { name: "a full night of sleep", minutes: 480 },
-];
+]; // 10 durations, exact match to v2.1.34
 
-// ─── Data Loading Pipeline ──────────────────────────────────────────────────
+// ─── GONE: speculative-decoding time-saved tracking ────────────────────────
+// v2.1.34 tracked `entry.type === "speculation-accept"` and surfaced
+// totalSpeculationTimeSavedMs. In v2.1.201 the raw-data loader (gur,
+// deobfuscated.js:662435-662629) no longer reads that entry type at all, and
+// its return object ends in a bare `...{}` spread (deobfuscated.js:662627) —
+// a dead remnant of where that field used to be spliced in. Grepping the
+// entire deobfuscated bundle for "speculation-accept" / "SpeculationTimeSaved"
+// returns zero hits. This is a real removal, not a rename.
 
-// Top-level data loader called by the React component
-// Returns { type: "success"|"error"|"empty", data?, message? }
-// deobfuscated.js:625812-625831
-function loadAllTimeStats() {
-  return loadStatsForPeriod("all")
-    .then((data) => {
-      if (!data || data.totalSessions === 0) {
-        return { type: "empty" };
-      }
-      return { type: "success", data: data };
-    })
-    .catch((err) => {
-      return {
-        type: "error",
-        message: err instanceof Error ? err.message : "Failed to load stats",
-      };
-    });
-}
+// ─── Overview Tab: streaks, heatmap, favorite model, peak hour ─────────────
+// deobfuscated.js:664221-664260 (aQf) — CONFIRMED, same fields as v2.1.34:
+//   Favorite model / Total tokens, Sessions / Longest session,
+//   Current streak / Longest streak, Active days / Peak hour,
+//   then the heatmap (TVo) and a "Stats from the last N days" footer.
+// Streak calc (GYl, deobfuscated.js:662900+) — CONFIRMED unchanged algorithm.
 
-// Main time-period dispatcher
-// deobfuscated.js:624360-624377
-async function loadStatsForPeriod(timePeriod) {
-  if (timePeriod === "all") {
-    return loadAllTimeStatsWithCache(); // l7z
-  }
-  // For "7d" or "30d", load session files and filter by date
-  let sessionFiles = await discoverSessionFiles(); // vbA
-  if (sessionFiles.length === 0) {
-    return emptyStats(); // wwq
-  }
-  let now = new Date();
-  let days = timePeriod === "7d" ? 7 : 30;
-  let startDate = new Date(now);
-  startDate.setDate(now.getDate() - days + 1);
-  let fromDateStr = formatDate(startDate); // ym
-  let rawData = await loadSessionData(sessionFiles, { fromDate: fromDateStr }); // dP1
-  return processRawStats(rawData); // i7z
-}
+// ─── Activity Heatmap ───────────────────────────────────────────────────────
+// deobfuscated.js:661686-661752 (TVo) — CONFIRMED unchanged:
+//   - up to 52 weeks x 7 days, GitHub-style grid
+//   - month labels on top row, Sun/Mon/Wed/Fri row labels
+//   - percentile buckets p25/p50/p75 (bJf, deobfuscated.js:661675-661685) map
+//     message-count-per-day to one of 5 intensities (0..4)
+//   - glyphs: 0 "·" (dim), 1 "░", 2 "▒", 3 "▓", 4 "█" — all in brand color
+//     #da7756 except the empty dot (deobfuscated.js:661768-661789)
 
-// All-time stats with disk cache for incremental updates
-// deobfuscated.js:624315-624359
-async function loadAllTimeStatsWithCache() {
-  let sessionFiles = await discoverSessionFiles();
-  if (sessionFiles.length === 0) {
-    return emptyStats();
-  }
-
-  // Load and update the cache under a mutex lock (fbA)
-  let cachedData = await withCacheLock(async () => {
-    let cache = readStatsCache();        // VbA — reads stats-cache.json
-    let yesterday = getYesterdayDate();  // NbA
-    let result = cache;
-
-    if (!cache.lastComputedDate) {
-      // Cache empty: process ALL historical sessions
-      debugLog("Stats cache empty, processing all historical data");
-      let allData = await loadSessionData(sessionFiles, { toDate: yesterday });
-      if (allData.sessionStats.length > 0) {
-        result = mergeStatsData(cache, allData, yesterday); // wp1
-        writeStatsCache(result); // w91 — atomic write to stats-cache.json
-      }
-    } else if (isDateBefore(cache.lastComputedDate, yesterday)) {
-      // Cache stale: load incremental data since last computed date
-      let nextDay = getNextDay(cache.lastComputedDate); // Ywq
-      debugLog(`Stats cache stale (${cache.lastComputedDate}), processing ${nextDay} to ${yesterday}`);
-      let newData = await loadSessionData(sessionFiles, {
-        fromDate: nextDay,
-        toDate: yesterday,
-      });
-      if (newData.sessionStats.length > 0 || newData.dailyActivity.length > 0) {
-        result = mergeStatsData(cache, newData, yesterday);
-        writeStatsCache(result);
-      } else {
-        // No new data, just update the date marker
-        result = { ...cache, lastComputedDate: yesterday };
-        writeStatsCache(result);
-      }
-    }
-    // else: cache is up-to-date for yesterday
-    return result;
-  });
-
-  // Always load today's data fresh (not cached, since day is still in progress)
-  let todayStr = getTodayDate(); // qwq
-  let todayData = await loadSessionData(sessionFiles, {
-    fromDate: todayStr,
-    toDate: todayStr,
-  });
-
-  // Merge cached historical data with today's live data
-  return mergeStatsResults(cachedData, todayData); // c7z
-}
-
-// ─── Session File Discovery ─────────────────────────────────────────────────
-// deobfuscated.js:624125-624172
-
-async function discoverSessionFiles() {
-  let sessionsDir = getProjectsDir(); // rd → joins cacheDir + "projects"
-  let fs = getFileSystem();           // x1
-  try {
-    await fs.stat(sessionsDir);
-  } catch {
-    return []; // Directory doesn't exist
-  }
-
-  // List project directories
-  let projectDirs = (await fs.readdir(sessionsDir))
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(sessionsDir, entry.name));
-
-  // For each project dir, find all .jsonl files (including subagent files)
-  return (
-    await Promise.all(
-      projectDirs.map(async (projDir) => {
-        try {
-          let entries = await fs.readdir(projDir);
-          // Direct .jsonl files in project dir
-          let mainFiles = entries
-            .filter((e) => e.isFile() && e.name.endsWith(".jsonl"))
-            .map((e) => join(projDir, e.name));
-          // Subagent directories: look for agent-*.jsonl in subagents/
-          let subdirs = entries.filter((e) => e.isDirectory());
-          let subagentFiles = await Promise.all(
-            subdirs.map(async (subdir) => {
-              let subagentPath = join(projDir, subdir.name, "subagents");
-              try {
-                return (await fs.readdir(subagentPath))
-                  .filter(
-                    (f) => f.isFile() && f.name.endsWith(".jsonl") && f.name.startsWith("agent-"),
-                  )
-                  .map((f) => join(subagentPath, f.name));
-              } catch {
-                return [];
-              }
-            }),
-          );
-          return [...mainFiles, ...subagentFiles.flat()];
-        } catch (err) {
-          debugLog(`Failed to read project directory ${projDir}: ${err instanceof Error ? err.message : String(err)}`);
-          return [];
-        }
-      }),
-    )
-  ).flat();
-}
-
-// ─── Core Session Data Loader ───────────────────────────────────────────────
-// deobfuscated.js:623957-624124
-//
-// Reads session JSONL files in batches of 20, extracts messages, aggregates by
-// date/hour/model. Filters by date range. Skips files whose mtime is before
-// fromDate for efficiency.
-
-async function loadSessionData(sessionFiles, { fromDate, toDate } = {}) {
-  let fs = getFileSystem();
-  let dailyActivityMap = new Map();     // date → { date, messageCount, sessionCount, toolCallCount }
-  let dailyModelTokensMap = new Map();  // date → { model → tokenCount }
-  let sessionStats = [];                // [{ sessionId, duration, messageCount, timestamp }]
-  let hourCounts = new Map();           // hour(0-23) → count
-  let totalMessages = 0;
-  let speculationTimeSaved = 0;
-  let modelUsage = {};
-  let longestSession = undefined;
-  let processedSessions = new Set();
-  let BATCH_SIZE = 20;
-
-  for (let i = 0; i < sessionFiles.length; i += BATCH_SIZE) {
-    let batch = sessionFiles.slice(i, i + BATCH_SIZE);
-    let results = await Promise.all(
-      batch.map(async (filePath) => {
-        try {
-          // OPTIMIZATION: Check file mtime before reading contents
-          if (fromDate) {
-            try {
-              let stat = await fs.stat(filePath);
-              let fileDateStr = formatDate(stat.mtime);
-              if (isDateBefore(fileDateStr, fromDate)) {
-                return { sessionFile: filePath, entries: null, error: null, skipped: true };
-              }
-            } catch {}
-          }
-          let entries = await readJsonlFile(filePath); // Y61
-          return { sessionFile: filePath, entries, error: null, skipped: false };
-        } catch (err) {
-          return { sessionFile: filePath, entries: null, error: err, skipped: false };
-        }
-      }),
-    );
-
-    for (let { sessionFile, entries, error, skipped } of results) {
-      if (skipped) continue;
-      if (error || !entries) {
-        debugLog(`Failed to read session file ${sessionFile}: ${error instanceof Error ? error.message : String(error)}`);
-        continue;
-      }
-
-      let sessionId = basename(sessionFile, ".jsonl");
-      let messages = [];
-      for (let entry of entries) {
-        if (isMessage(entry)) {          // eh — checks if entry is a message type
-          messages.push(entry);
-        } else if (entry.type === "speculation-accept") {
-          speculationTimeSaved += entry.timeSavedMs;
-        }
-      }
-      if (messages.length === 0) continue;
-
-      // Filter out sidechain messages (subagent messages)
-      let mainMessages = messages.filter((m) => !m.isSidechain);
-      if (mainMessages.length === 0) continue;
-
-      let firstMsg = mainMessages[0];
-      let lastMsg = mainMessages[mainMessages.length - 1];
-      let startTime = new Date(firstMsg.timestamp);
-      let endTime = new Date(lastMsg.timestamp);
-      let dateStr = formatDate(startTime);
-
-      // Date range filtering
-      if (fromDate && isDateBefore(dateStr, fromDate)) continue;
-      if (toDate && isDateBefore(toDate, dateStr)) continue;
-
-      let durationMs = endTime.getTime() - startTime.getTime();
-      sessionStats.push({
-        sessionId,
-        duration: durationMs,
-        messageCount: mainMessages.length,
-        timestamp: firstMsg.timestamp,
-      });
-      totalMessages += mainMessages.length;
-
-      // Aggregate daily activity
-      let dayData = dailyActivityMap.get(dateStr) || {
-        date: dateStr, messageCount: 0, sessionCount: 0, toolCallCount: 0,
-      };
-      dayData.sessionCount++;
-      dayData.messageCount += mainMessages.length;
-      dailyActivityMap.set(dateStr, dayData);
-
-      // Aggregate by hour
-      let hour = startTime.getHours();
-      hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1);
-
-      // Aggregate model usage from assistant messages with usage data
-      for (let msg of mainMessages) {
-        if (msg.type === "assistant") {
-          // Count tool calls
-          let content = msg.message?.content;
-          if (Array.isArray(content)) {
-            for (let block of content) {
-              if (block.type === "tool_use") {
-                dailyActivityMap.get(dateStr).toolCallCount++;
-              }
-            }
-          }
-          // Aggregate token usage by model
-          if (msg.message?.usage) {
-            let usage = msg.message.usage;
-            let model = msg.message.model || "unknown";
-            if (model === HIDDEN_MODEL_ID) continue; // aX1 — skip hidden/internal model
-            if (!modelUsage[model]) {
-              modelUsage[model] = {
-                inputTokens: 0, outputTokens: 0,
-                cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-                webSearchRequests: 0, costUSD: 0,
-                contextWindow: 0, maxOutputTokens: 0,
-              };
-            }
-            modelUsage[model].inputTokens += usage.input_tokens || 0;
-            modelUsage[model].outputTokens += usage.output_tokens || 0;
-            modelUsage[model].cacheReadInputTokens += usage.cache_read_input_tokens || 0;
-            modelUsage[model].cacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
-
-            let totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-            if (totalTokens > 0) {
-              let dayModelTokens = dailyModelTokensMap.get(dateStr) || {};
-              dayModelTokens[model] = (dayModelTokens[model] || 0) + totalTokens;
-              dailyModelTokensMap.set(dateStr, dayModelTokens);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return {
-    dailyActivity: Array.from(dailyActivityMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
-    dailyModelTokens: Array.from(dailyModelTokensMap.entries())
-      .map(([date, tokensByModel]) => ({ date, tokensByModel }))
-      .sort((a, b) => a.date.localeCompare(b.date)),
-    modelUsage,
-    sessionStats,
-    hourCounts: Object.fromEntries(hourCounts),
-    totalMessages,
-    totalSpeculationTimeSavedMs: speculationTimeSaved,
-  };
-}
-
-// ─── Stats Processing ───────────────────────────────────────────────────────
-// deobfuscated.js:624378-624445
-
-function processRawStats(rawData) {
-  let sortedDaily = [...rawData.dailyActivity].sort((a, b) => a.date.localeCompare(b.date));
-  let sortedModelTokens = [...rawData.dailyModelTokens].sort((a, b) => a.date.localeCompare(b.date));
-  let streaks = calculateStreaks(sortedDaily); // zwq
-
-  // Find longest session
-  let longestSession = null;
-  for (let session of rawData.sessionStats) {
-    if (!longestSession || session.duration > longestSession.duration) {
-      longestSession = session;
-    }
-  }
-
-  // Find first and last session timestamps
-  let firstTimestamp = null;
-  let lastTimestamp = null;
-  for (let session of rawData.sessionStats) {
-    if (!firstTimestamp || session.timestamp < firstTimestamp) firstTimestamp = session.timestamp;
-    if (!lastTimestamp || session.timestamp > lastTimestamp) lastTimestamp = session.timestamp;
-  }
-
-  // Peak activity day (most messages)
-  let peakDay = sortedDaily.length > 0
-    ? sortedDaily.reduce((best, curr) => curr.messageCount > best.messageCount ? curr : best).date
-    : null;
-
-  // Peak activity hour
-  let hourEntries = Object.entries(rawData.hourCounts);
-  let peakHour = hourEntries.length > 0
-    ? parseInt(hourEntries.reduce((best, [hour, count]) => count > parseInt(best[1].toString()) ? [hour, count] : best)[0], 10)
-    : null;
-
-  let totalDays = firstTimestamp && lastTimestamp
-    ? Math.ceil((new Date(lastTimestamp).getTime() - new Date(firstTimestamp).getTime()) / 86400000) + 1
-    : 0;
-
-  return {
-    totalSessions: rawData.sessionStats.length,
-    totalMessages: rawData.totalMessages,
-    totalDays,
-    activeDays: rawData.dailyActivity.length,
-    streaks,
-    dailyActivity: sortedDaily,
-    dailyModelTokens: sortedModelTokens,
-    longestSession,
-    modelUsage: rawData.modelUsage,
-    firstSessionDate: firstTimestamp,
-    lastSessionDate: lastTimestamp,
-    peakActivityDay: peakDay,
-    peakActivityHour: peakHour,
-    totalSpeculationTimeSavedMs: rawData.totalSpeculationTimeSavedMs,
-  };
-}
-
-// ─── Streak Calculator ──────────────────────────────────────────────────────
-// deobfuscated.js:624485-624545
-
-function calculateStreaks(dailyActivity) {
-  if (dailyActivity.length === 0) {
-    return {
-      currentStreak: 0, longestStreak: 0,
-      currentStreakStart: null, longestStreakStart: null, longestStreakEnd: null,
-    };
-  }
-
-  // Current streak: count backwards from today
-  let today = new Date();
-  today.setHours(0, 0, 0, 0);
-  let currentStreak = 0;
-  let currentStreakStart = null;
-  let checkDate = new Date(today);
-  let activeDates = new Set(dailyActivity.map((d) => d.date));
-
-  while (true) {
-    let dateStr = formatDate(checkDate);
-    if (!activeDates.has(dateStr)) break;
-    currentStreak++;
-    currentStreakStart = dateStr;
-    checkDate.setDate(checkDate.getDate() - 1);
-  }
-
-  // Longest streak: scan all dates for consecutive runs
-  let longestStreak = 0;
-  let longestStart = null;
-  let longestEnd = null;
-  if (dailyActivity.length > 0) {
-    let sortedDates = Array.from(activeDates).sort();
-    let runLength = 1;
-    let runStart = sortedDates[0];
-    for (let i = 1; i < sortedDates.length; i++) {
-      let prevDate = new Date(sortedDates[i - 1]);
-      let currDate = new Date(sortedDates[i]);
-      if (Math.round((currDate.getTime() - prevDate.getTime()) / 86400000) === 1) {
-        runLength++;
-      } else {
-        if (runLength > longestStreak) {
-          longestStreak = runLength;
-          longestStart = runStart;
-          longestEnd = sortedDates[i - 1];
-        }
-        runLength = 1;
-        runStart = sortedDates[i];
-      }
-    }
-    if (runLength > longestStreak) {
-      longestStreak = runLength;
-      longestStart = runStart;
-      longestEnd = sortedDates[sortedDates.length - 1];
-    }
-  }
-
-  return {
-    currentStreak, longestStreak,
-    currentStreakStart, longestStreakStart: longestStart, longestStreakEnd: longestEnd,
-  };
-}
-
-// ─── Activity Heatmap (GitHub-style) ────────────────────────────────────────
-// deobfuscated.js:624591-624672
-
-function renderActivityHeatmap(dailyActivity, { terminalWidth = 80, showMonthLabels = true } = {}) {
-  let LABEL_WIDTH = 4;
-  let chartWidth = terminalWidth - LABEL_WIDTH;
-  let numWeeks = Math.min(52, Math.max(10, chartWidth)); // 10-52 weeks
-
-  // Build date→activity lookup
-  let activityMap = new Map();
-  for (let entry of dailyActivity) {
-    activityMap.set(entry.date, entry);
-  }
-
-  let percentiles = calculatePercentiles(dailyActivity); // n7z
-
-  // Start from numWeeks ago, aligned to week boundaries
-  let today = new Date();
-  today.setHours(0, 0, 0, 0);
-  let startOfWeek = new Date(today);
-  startOfWeek.setDate(today.getDate() - today.getDay()); // Sunday
-  let startDate = new Date(startOfWeek);
-  startDate.setDate(startDate.getDate() - (numWeeks - 1) * 7);
-
-  // Build 7×numWeeks grid (rows=days of week, cols=weeks)
-  let grid = Array.from({ length: 7 }, () => Array(numWeeks).fill(""));
-  let monthLabels = [];
-  let lastMonth = -1;
-  let currentDate = new Date(startDate);
-
-  for (let week = 0; week < numWeeks; week++) {
-    for (let day = 0; day < 7; day++) {
-      if (currentDate > today) {
-        grid[day][week] = " ";
-        currentDate.setDate(currentDate.getDate() + 1);
-        continue;
-      }
-      let dateStr = formatDate(currentDate);
-      let entry = activityMap.get(dateStr);
-
-      // Track month boundaries for labels
-      if (day === 0) {
-        let month = currentDate.getMonth();
-        if (month !== lastMonth) {
-          monthLabels.push({ month, week });
-          lastMonth = month;
-        }
-      }
-
-      let level = getActivityLevel(entry?.messageCount || 0, percentiles); // r7z
-      grid[day][week] = getHeatmapChar(level); // o7z
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
-  }
-
-  // ... renders grid rows with month labels below
-}
-
-// Percentile calculator for heatmap thresholds
-// deobfuscated.js:624578-624590
-function calculatePercentiles(dailyActivity) {
-  let counts = dailyActivity
-    .map((d) => d.messageCount)
-    .filter((c) => c > 0)
-    .sort((a, b) => a - b);
-  if (counts.length === 0) return null;
-  return {
-    p25: counts[Math.floor(counts.length * 0.25)],
-    p50: counts[Math.floor(counts.length * 0.5)],
-    p75: counts[Math.floor(counts.length * 0.75)],
-  };
-}
-
-// Activity level classification (0-4)
-// deobfuscated.js:624674-624688
-function getActivityLevel(messageCount, percentiles) {
+function dayIntensity(messageCount, percentiles) {
   if (messageCount === 0 || !percentiles) return 0;
   if (messageCount >= percentiles.p75) return 4;
   if (messageCount >= percentiles.p50) return 3;
@@ -604,258 +240,59 @@ function getActivityLevel(messageCount, percentiles) {
   return 1;
 }
 
-// Heatmap character mapping
-// deobfuscated.js:624689-624705
-function getHeatmapChar(level) {
-  switch (level) {
-    case 0: return chalk.gray("·");  // No activity
-    case 1: return colorize("░");    // Low (< p25)
-    case 2: return colorize("▒");    // Medium (p25-p50)
-    case 3: return colorize("▓");    // High (p50-p75)
-    case 4: return colorize("█");    // Very high (>= p75)
-    default: return chalk.gray("·");
-  }
-}
-
-// ─── Fun Fact Generator ─────────────────────────────────────────────────────
-// deobfuscated.js:626719-626748
+// ─── Stats Cache — CHANGED: version bumped 2 -> 4, migration path added ────
+// deobfuscated.js:661662-661665
+//   var CACHE_VERSION = 4;        // rJe  — was 2 in v2.1.34
+//   var CACHE_MIN_VERSION = 1;    // hJf  — oldest version still migratable
+//   var CACHE_FILENAME = "stats-cache.json"; // yJf — unchanged path/name
 //
-// Generates random "fun fact" comparisons like:
-//   "You've used ~3x more tokens than The Great Gatsby"
-//   "Your longest session is ~2x longer than a TED talk"
-
-function generateFunFact(stats, totalTokens) {
-  let facts = [];
-
-  // Token comparisons
-  if (totalTokens > 0) {
-    let matchingBooks = TOKEN_COMPARISONS.filter((book) => totalTokens >= book.tokens);
-    for (let book of matchingBooks) {
-      let ratio = totalTokens / book.tokens;
-      if (ratio >= 2) {
-        facts.push(`You've used ~${Math.floor(ratio)}x more tokens than ${book.name}`);
-      } else {
-        facts.push(`You've used the same number of tokens as ${book.name}`);
-      }
-    }
-  }
-
-  // Duration comparisons
-  if (stats.longestSession) {
-    let durationMinutes = stats.longestSession.duration / 60000;
-    for (let comp of DURATION_COMPARISONS) {
-      let ratio = durationMinutes / comp.minutes;
-      if (ratio >= 2) {
-        facts.push(`Your longest session is ~${Math.floor(ratio)}x longer than ${comp.name}`);
-      }
-    }
-  }
-
-  if (facts.length === 0) return "";
-  // Return a random fact
-  return facts[Math.floor(Math.random() * facts.length)];
-}
-
-// ─── Stacked Area Chart (Models Tab) ────────────────────────────────────────
-// deobfuscated.js:627068-627128
+// Migration (deobfuscated.js:661510-661534, wYl):
+//   - if stored version !== CACHE_VERSION, attempt _Jf() migration (adds any
+//     new fields with safe defaults, re-stamps version: CACHE_VERSION)
+//   - if version < CACHE_MIN_VERSION or structurally invalid -> log + return a
+//     fresh empty cache (EVo, deobfuscated.js:661474-661488) instead of
+//     crashing
+//   - successful migration is immediately persisted back to disk and logged:
+//     "Migrated stats cache from v{old} to v{new}"
 //
-// Uses the `asciichart` library (vwq/e2q) to plot a stacked area chart of
-// tokens per day, broken down by top 3 models.
-
-function renderModelChart(dailyModelTokens, modelNames, terminalWidth) {
-  if (dailyModelTokens.length < 2 || modelNames.length === 0) return null;
-
-  let LABEL_WIDTH = 7;
-  let chartWidth = terminalWidth - LABEL_WIDTH;
-  let numPoints = Math.min(52, Math.max(20, chartWidth));
-
-  // Resample data to fit chart width
-  let data;
-  if (dailyModelTokens.length >= numPoints) {
-    data = dailyModelTokens.slice(-numPoints);
-  } else {
-    // Stretch data by repeating points
-    let repeatFactor = Math.floor(numPoints / dailyModelTokens.length);
-    data = [];
-    for (let entry of dailyModelTokens) {
-      for (let i = 0; i < repeatFactor; i++) data.push(entry);
-    }
-  }
-
-  let theme = getThemeColors(getUserSettings().theme);
-  let chartColors = [resolveColor(theme.suggestion), resolveColor(theme.success), resolveColor(theme.warning)];
-
-  // Build series for top 3 models
-  let series = [];
-  let legend = [];
-  let topModels = modelNames.slice(0, 3);
-  for (let i = 0; i < topModels.length; i++) {
-    let model = topModels[i];
-    let values = data.map((d) => d.tokensByModel[model] || 0);
-    if (values.some((v) => v > 0)) {
-      series.push(values);
-      legend.push({
-        model: getShortModelName(model), // EP — friendly model name
-        coloredBullet: colorize("●", [theme.suggestion, theme.success, theme.warning][i % 3]),
-      });
-    }
-  }
-
-  if (series.length === 0) return null;
-
-  // Render using asciichart library
-  let chart = asciichart.plot(series, {
-    height: 8,
-    colors: chartColors.slice(0, series.length),
-    format: (val) => {
-      let label;
-      if (val >= 1000000) label = (val / 1000000).toFixed(1) + "M";
-      else if (val >= 1000) label = (val / 1000).toFixed(0) + "k";
-      else label = val.toFixed(0);
-      return label.padStart(6);
-    },
-  });
-
-  let xAxisLabels = renderXAxisLabels(data, data.length, LABEL_WIDTH);
-  return { chart, legend, xAxisLabels };
-}
-
-// ─── React Components (Ink UI) ──────────────────────────────────────────────
-
-// Wrapper component — loads data via React.use() (Suspense)
-// deobfuscated.js:625832-625875
-function StatsDialogWrapper({ onClose }) {
-  let allTimePromise = loadAllTimeStats(); // Memoized via React Compiler
-  return React.createElement(
-    React.Suspense,
-    { fallback: /* <Box><Spinner/> Loading your Claude Code stats…</Box> */ },
-    React.createElement(StatsDialog, { allTimePromise, onClose }),
-  );
-}
-
-// Main stats dialog component
-// deobfuscated.js:625876-626176
+// NEW field in the cache schema: `shotDistribution` (deobfuscated.js:661486,
+// 661507) is present in both the empty-cache shape and the migrated shape,
+// but nothing in the file populates or reads it — it's a reserved/half-wired
+// field, not yet surfaced in any UI.
 //
-// State:
-//   - timePeriod: "all" | "7d" | "30d" (cycled with 'r' key)
-//   - periodCache: {} — caches loaded data per period
-//   - isLoading: bool — shows spinner while loading new period
-//   - activeTab: "Overview" | "Models" (toggled with Tab key)
-//   - copyStatus: null | "copying…" | "copied!" | "copy failed"
+// Atomic write + mutex — CONFIRMED unchanged:
+//   - vYl (deobfuscated.js:661456-661470): a promise-chained in-process mutex
+//     (not a cross-process lockfile) serializing read-modify-write cycles.
+//   - Ttn (deobfuscated.js:661535-661548): writes via
+//     Qs().atomicWrite(path, JSON.stringify(cache, null, 2), 384) — mode 384
+//     decimal = 0o600.
 //
-// Key bindings:
-//   - Esc / ctrl+c / ctrl+d → close dialog
-//   - Tab → toggle between Overview and Models tabs
-//   - r → cycle time period (all → 7d → 30d → all)
-//   - ctrl+s → copy stats to clipboard (macOS only, checked via E9/isMac)
-//   - ↑/↓ → scroll model list (Models tab, when > 4 models)
-//
-// Layout:
-//   <Box flexDirection="column" marginX=1 marginTop=1>
-//     <TabView title="" color="claude" defaultTab="Overview">
-//       <Tab title="Overview"> <OverviewTab stats dateRange isLoading /> </Tab>
-//       <Tab title="Models">   <ModelsTab stats dateRange isLoading />   </Tab>
-//     </TabView>
-//     <Box paddingLeft=1>
-//       <Text dimColor>Esc to cancel · r to cycle dates · ctrl+s to copy</Text>
-//     </Box>
-//   </Box>
+// Incremental compute (FJf, deobfuscated.js:662787-662830) — CONFIRMED
+// unchanged behavior: cache holds everything through *yesterday*;
+// *today's* data is always recomputed fresh on every call and merged in
+// (BJf, deobfuscated.js:662663-662763), never persisted to the cache.
 
-// ─── Copy to Clipboard ──────────────────────────────────────────────────────
-// deobfuscated.js:627157-627279
+var CACHE_VERSION = 4;
+var CACHE_MIN_VERSION = 1;
+var CACHE_FILENAME = "stats-cache.json";
 
-// Text formatters for clipboard copy (Q4z = Overview, U4z = Models)
-// These produce plain-text representations with chalk styling for terminal paste
+// ─── Session File Discovery — CONFIRMED unchanged ──────────────────────────
+// deobfuscated.js:662630-662662 (jYl)
+//   ~/.claude/projects/*/*.jsonl (main session files) plus
+//   ~/.claude/projects/*/**/subagents/agent-*.jsonl (subagent transcripts).
 
-function formatOverviewForCopy(stats) {
-  // deobfuscated.js:627188-627242
-  let lines = [];
-  let theme = getThemeColors(getUserSettings().theme);
-  let highlight = (text) => colorize(text, theme.claude);
+// ─── Raw Session Data Loader — CONFIRMED unchanged batch size ──────────────
+// deobfuscated.js:662435-662629 (gur)
+//   - reads files in batches of 20 (var BATCH_SIZE = 20 at deobfuscated.js:662449)
+//   - skips a file early via mtime check when it predates `fromDate`
+//   - subagent files (`.../subagents/...`) contribute to modelUsage/token
+//     aggregation but are excluded from sessionStats/streak/heatmap counts
+//     (the `!I` guards, where I = path includes "/subagents/")
+//   - excludes the hidden/internal model id from modelUsage
+//     (`if (V === px) continue` at deobfuscated.js:662587 — px is the same
+//     hidden-model sentinel used elsewhere in the bundle)
 
-  if (stats.dailyActivity.length > 0) {
-    lines.push(renderActivityHeatmap(stats.dailyActivity, { terminalWidth: 56 }));
-    lines.push("");
-  }
-
-  let sortedModels = Object.entries(stats.modelUsage).sort(
-    ([, a], [, b]) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens),
-  );
-  let topModel = sortedModels[0];
-  let totalTokens = sortedModels.reduce((sum, [, u]) => sum + u.inputTokens + u.outputTokens, 0);
-
-  if (topModel) {
-    lines.push(formatRow("Favorite model", getShortModelName(topModel[0]), "Total tokens", formatNumber(totalTokens)));
-  }
-  lines.push("");
-  lines.push(formatRow("Sessions", formatNumber(stats.totalSessions), "Longest session", stats.longestSession ? formatDuration(stats.longestSession.duration) : "N/A"));
-  // ... current streak, longest streak, active days, peak hour
-  lines.push("");
-  lines.push(highlight(generateFunFact(stats, totalTokens)));
-  lines.push(chalk.gray(`Stats from the last ${stats.totalDays} days`));
-  return lines;
-}
-
-function formatModelsForCopy(stats) {
-  // deobfuscated.js:627243-627279
-  // Renders tokens-per-day chart + top 3 models with token breakdown
-}
-
-// ─── Cache Infrastructure ───────────────────────────────────────────────────
-
-// Mutex lock for cache operations (prevents concurrent writes)
-// deobfuscated.js:623726-623738
-var cacheLockPromise = null; // vV6
-
-async function withCacheLock(callback) {
-  while (cacheLockPromise) {
-    await cacheLockPromise;
-  }
-  let resolve;
-  cacheLockPromise = new Promise((r) => { resolve = r; });
-  try {
-    return await callback();
-  } finally {
-    cacheLockPromise = null;
-    resolve?.();
-  }
-}
-
-// Cache read — reads stats-cache.json, validates version
-// deobfuscated.js:623760-623794
-function readStatsCache() {
-  let fs = getFileSystem();
-  let cachePath = getStatsCachePath(); // Awq
-  try {
-    if (!fs.existsSync(cachePath)) return emptyCacheObject(); // EV6
-    let json = fs.readFileSync(cachePath, { encoding: "utf-8" });
-    let parsed = JSON.parse(json);
-    if (parsed.version !== CACHE_VERSION) return emptyCacheObject(); // kV6 = 2
-    // Validate structure
-    if (!Array.isArray(parsed.dailyActivity) || !Array.isArray(parsed.dailyModelTokens) ||
-        typeof parsed.totalSessions !== "number" || typeof parsed.totalMessages !== "number") {
-      return emptyCacheObject();
-    }
-    return parsed;
-  } catch {
-    return emptyCacheObject();
-  }
-}
-
-// Cache write — atomic write (temp file + rename)
-// deobfuscated.js:623795-623822
-function writeStatsCache(data) {
-  let fs = getFileSystem();
-  let cachePath = getStatsCachePath();
-  let tmpPath = `${cachePath}.${randomBytes(8).toString("hex")}.tmp`;
-  try {
-    let dir = getCacheDir();
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    let json = JSON.stringify(data, null, 2);
-    writeFileSync(tmpPath, json, { encoding: "utf-8", mode: 0o600, flush: true });
-    fs.renameSync(tmpPath, cachePath); // Atomic rename
-  } catch (err) {
-    logError(err);
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
-  }
-}
+// ─── Date-range dispatch (all / 7d / 30d) — CONFIRMED unchanged ───────────
+// deobfuscated.js:662832-662849 (xVo): "all" goes through the cached path
+// (FJf); "7d"/"30d" always do a fresh uncached gur() scan over the trailing
+// N days and post-process via UJf (deobfuscated.js:662850-662889).

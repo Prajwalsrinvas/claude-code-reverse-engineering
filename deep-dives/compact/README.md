@@ -1,25 +1,28 @@
 # How Claude Code's `/compact` Command Works
 
-> **Analysis model:** Claude Opus 4.6 (`claude-opus-4-6`) via Claude Code CLI (subscription)\
-> **Estimated API cost (reference):** ~$7\
-> **Date:** 2026-02-07\
-> **Source:** Claude Code npm package v2.1.34, unminified with webcrack + prettier\
-> **Annotated files:** `compact-annotated.js`
+> **Analysis model:** Claude Fable 5 (`claude-fable-5`) via Claude Code CLI\
+> **Date:** 2026-07-04\
+> **Source:** Claude Code v2.1.201, extracted from the Bun standalone binary, unminified with webcrack (`--no-jsx`) + prettier\
+> **Annotated files:** `compact-annotated.js`\
+> **Build:** `2.1.201`, git `5bb45156`, built `2026-07-03`
+
+> **What changed since the 2.1.34 analysis:** `/compact` is the deep dive that evolved the most. The single self-contained module is gone — the feature is now spread across several clusters. The **session-memory fast path was removed** and replaced by a background **precompute/borrow** system. The summarization prompt was **hardened against prompt injection**. There is a new **`/autocompact`** command, a **circuit breaker**, a **thrashing detector**, and **compact prompt-cache sharing**. Each of these is called out in [How this evolved](#how-this-evolved-since-2134). The read on *why*: every change points at making auto-compaction cheaper, safer, and less likely to loop — compaction moved from a user-triggered action to a mostly-invisible background system that has to be robust on its own.
 
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [Command Definition & Registration](#command-definition--registration)
-3. [The Compact Pipeline](#the-compact-pipeline)
-4. [The Summarization Prompt](#the-summarization-prompt)
-5. [Auto-Compact System](#auto-compact-system)
-6. [Session Memory Fast Path](#session-memory-fast-path)
-7. [Micro-Compact Pre-Processing](#micro-compact-pre-processing)
-8. [Post-Compact Context Restoration](#post-compact-context-restoration)
-9. [Hooks System](#hooks-system)
-10. [Key Constants](#key-constants)
-11. [Environment Variables](#environment-variables)
-12. [Summary](#summary)
+2. [Where the Code Lives](#where-the-code-lives)
+3. [Command Definition & Dispatch](#command-definition--dispatch)
+4. [The Compact Pipeline](#the-compact-pipeline)
+5. [The Summarization Prompt](#the-summarization-prompt)
+6. [Auto-Compact, Precompute & Thresholds](#auto-compact-precompute--thresholds)
+7. [Circuit Breaker & Thrashing Detector](#circuit-breaker--thrashing-detector)
+8. [Reactive Micro-Compaction](#reactive-micro-compaction)
+9. [Post-Compact Context Restoration](#post-compact-context-restoration)
+10. [Hooks System](#hooks-system)
+11. [Key Constants](#key-constants)
+12. [Environment Variables](#environment-variables)
+13. [How this evolved since 2.1.34](#how-this-evolved-since-2134)
 
 ---
 
@@ -27,325 +30,219 @@
 
 ```mermaid
 flowchart TD
-    A[User types /compact] --> B{Custom instructions?}
-    B -->|No| C[Try Session Memory Fast Path]
-    C -->|Success| D[Return compacted messages]
-    C -->|Fail/unavailable| E[Standard LLM Path]
-    B -->|Yes| E
-    E --> F[Micro-compact: trim large tool results]
-    F --> G[Run PreCompact hooks]
-    G --> H[Build summarization prompt]
-    H --> I[Call Claude API with streaming]
-    I --> J[Validate response]
-    J --> K[Re-read recently accessed files]
-    K --> L[Add agent memory, todos, etc.]
-    L --> M[Run session_start hooks]
-    M --> N[Create boundary marker + summary message]
-    N --> D
+    A[User types /compact] --> B[Run PreCompact hooks + build context in parallel]
+    B --> C{Precomputed-compact cache hit?}
+    C -->|Hit| D[Reuse background-generated summary]
+    C -->|Miss| E[Fresh reactive compaction]
+    E --> F[Build summarization prompt hardened, no-tools]
+    F --> G[Try forking conversation cache for the summary call]
+    G --> H[Streaming API call to the main-loop model, w/ fallback chain]
+    H --> I{Prompt too long?}
+    I -->|Yes| J[Adaptive grouped retry seeded from overflow size]
+    J --> H
+    I -->|No| K[Validate response text-only]
+    K --> L[Restore files, plan, skills, memory, todos]
+    L --> M[Run session-start-style compact hooks]
+    M --> N[Boundary marker + summary message]
+    D --> N
 
     style C fill:#e8f5e9,color:#1a1a1a
-    style I fill:#e3f2fd,color:#1a1a1a
-    style F fill:#fff3e0,color:#1a1a1a
+    style G fill:#fff3e0,color:#1a1a1a
+    style H fill:#e3f2fd,color:#1a1a1a
 ```
 
-The `/compact` command has **two code paths**:
+The key mental-model shift from 2.1.34: compaction is no longer "try to skip the LLM call." The LLM call is assumed necessary — the optimization is that **it may already have run in the background** before you (or auto-compact) ask for it.
 
-| Path | When Used | LLM Call? | Speed |
-|------|-----------|-----------|-------|
-| **Session Memory Fast Path** | No custom instructions + session memory available | No | Instant |
-| **Standard LLM Path** | Custom instructions provided, or session memory unavailable | Yes (streaming) | 5-15s |
+## Where the Code Lives
 
-## Command Definition & Registration
+At 2.1.34 the whole feature sat in one `v(() => {...})` module. In 2.1.201 it is spread across clusters that share helpers:
 
-The compact command is registered as a **`type: "local"`** command (not `"prompt"` or `"local-jsx"`).
+| Cluster | Lines (`deobfuscated.js`) | Contents |
+|---------|---------------------------|----------|
+| Command registration | 647519–647920 | `/compact` and the new `/autocompact` |
+| Prompt text + legacy full-compact | 400760–402770 | Summarization prompts, legacy compactor, cache-sharing API call |
+| Reactive / precompute engine | 403200–404200 | Precompute cache, grouped adaptive retry |
+| Auto-compact thresholds + breaker | 619860–620530 | Threshold math, circuit breaker, thrash detector |
+| Reactive micro-clear | 597188–597290, 615914–616029 | `context_hint`-reject driven tool-result clearing |
+| PreCompact hook runner | 627034–627070 | Hook payload assembly |
+| Post-compact restore | 402207–402300+ | Files, plan, skills, todos, memory |
 
-**Source:** `deobfuscated.js:554406`
+## Command Definition & Dispatch
+
+`/compact` is still a **`type: "local"`** command (`deobfuscated.js:647811`):
 
 ```js
 {
   type: "local",
   name: "compact",
-  description: "Clear conversation history but keep a summary in context. Optional: /compact [instructions for summarization]",
-  isEnabled: () => !isTruthy(process.env.DISABLE_COMPACT),
-  isHidden: false,
+  description: "Free up context by summarizing the conversation so far", // changed wording
+  isEnabled: () => !DISABLE_COMPACT,
   supportsNonInteractive: true,
   argumentHint: "<optional custom summarization instructions>",
+  thinClientDispatch: "post-text",   // new: generic thin-client routing tag (~15 commands use it)
   load: () => Promise.resolve().then(() => { initCompactModule(); return compactModule; }),
-  userFacingName() { return "compact"; },
 }
 ```
 
-Key properties:
-- **`type: "local"`** — The command runs locally (not sent as a prompt to the LLM). Its `call` export is invoked directly.
-- **`isEnabled`** — Disabled if `DISABLE_COMPACT` env var is truthy.
-- **`argumentHint`** — Shows in the UI that you can pass custom instructions.
-- **`load`** — Lazy-loads the compact module, which exports `{ call: compactEntryPoint }`.
+Differences from 2.1.34: the description changed from *"Clear conversation history but keep a summary in context…"* to *"Free up context by summarizing the conversation so far"*, `isHidden: false` is gone, and a `thinClientDispatch: "post-text"` field was added (not compact-specific — it tags how thin clients route the command).
 
-### How `type: "local"` Commands Are Dispatched
+Dispatch is unchanged in shape: the `"local"` handler calls `(await command.load()).call(args, ctx)`, and a `"compact"` return type **replaces the entire message history** with the compacted output — still unique to compact among local commands.
 
-When the user submits `/compact [args]`, the dispatch function (`NGY` at line 467216) matches on `O.type`:
+### New sibling: `/autocompact`
 
-```js
-case "local": {
-  let result = await (await command.load()).call(args, toolUseContext);
-  if (result.type === "compact") {
-    // Special handling: replace entire conversation with compacted messages
-    let assembled = assembleCompactedMessages({ ...result.compactionResult, messagesToKeep: [...] });
-    return { messages: assembled, shouldQuery: false };
-  }
-  // ... other result types
-}
-```
-
-The `"compact"` return type is specially handled — it **replaces the entire message history** with the compacted output. This is unique to compact; other local commands just append their output.
-
----
+A new command registered right after compact (`deobfuscated.js:648280`+) lets the user configure the auto-compact window directly. It has two variants — an interactive `local-jsx` slider UI and a non-interactive `local` variant — and both write the auto-compact window setting (`/autocompact [auto|<tokens>]`), surfaced as "auto", a token count, or "from `CLAUDE_CODE_AUTO_COMPACT_WINDOW`" / "from settings".
 
 ## The Compact Pipeline
 
-### Entry Point (`compactEntryPoint` — line 554320)
-
 ```
-compactEntryPoint(userArgs, context)
-  ├── if no custom instructions → try sessionMemoryCompact() [fast path]
-  ├── microCompactMessages()  [trim large tool results]
-  ├── performCompaction()     [main pipeline]
-  │   ├── runPreCompactHooks()
-  │   ├── buildSummarizationPrompt(customInstructions)
-  │   ├── callCompactionLLM()  [streaming API call]
-  │   ├── validate response (no text? API error? prompt too long?)
-  │   ├── restoreRecentFiles()
-  │   ├── getAgentMemory(), getTodoContext()
-  │   ├── runLifecycleHooks("compact")
-  │   └── assemble result
+manualCompactEntry(userArgs, ctx)
+  ├── runPreCompactHooks()  ┐  (run in parallel)
+  ├── buildForkContext()    ┘
+  ├── checkPrecomputedCompactCache()
+  │     ├── HIT  → reuse the background-generated compaction result
+  │     └── MISS → freshReactiveCompaction()
+  │                 ├── buildSummarizationPrompt(customInstructions)
+  │                 ├── tryForkConversationCache()   [prompt-cache sharing]
+  │                 ├── streamingCompactionCall()      [main-loop model + fallback chain]
+  │                 ├── adaptiveGroupedRetry()         [on prompt-too-long / media-too-large]
+  │                 ├── validate (text only)
+  │                 └── restoreContext()               [files, plan, skills, memory, todos]
   └── return { type: "compact", compactionResult, displayText }
 ```
 
-### Step-by-Step
-
-1. **Track usage** — `Q4("compact")` records telemetry for the compact command.
-
-2. **Fast path attempt** — If no custom instructions, tries `nG6()` (session memory compact). If it returns a result, skip the LLM call entirely.
-
-3. **Micro-compact** — `Ym()` pre-processes messages by shrinking large tool results. Tool results from "compactible tools" (Read, Bash, etc.) that are old and large get replaced with file references like `"Tool result saved to: /path"`. This reduces the token count before the summarization call.
-
-4. **Build context** — `XdY()` assembles the system prompt, user context (CLAUDE.md etc.), and system context for the fork.
-
-5. **Perform compaction** (`sj1()` — line 531497):
-   - Count pre-compact tokens
-   - Run **PreCompact hooks** (user can inject custom instructions via hooks)
-   - Build the summarization prompt with `LHA(customInstructions)`
-   - Make the **streaming API call** via `nn4()`
-   - Validate the response text
-   - **Re-read recently accessed files** to preserve them in the new context
-   - Add agent memory, todo context
-   - Run **lifecycle hooks** with the `"compact"` event (analogous to session start)
-   - Calculate token metrics and create the boundary marker
-
-6. **Clean up** — Clear caches, reset state, return the result.
-
----
+The old **session-memory fast path** (a zero-LLM template-based skip, `nG6` in the 2.1.34 analysis) no longer exists — an exhaustive search for a template-skip mechanism found nothing. It was replaced by the precompute/borrow system: auto-compaction can run the summarization LLM call *in the background* before the context is actually full, cache the result (7-day TTL), and a later `/compact` or auto-compact trigger simply reuses it if it's still fresh.
 
 ## The Summarization Prompt
 
-The compaction call has two parts:
-
-**System prompt** (`deobfuscated.js:531890`):
-```
-"You are a helpful AI assistant tasked with summarizing conversations."
-```
-
-**User prompt** (`deobfuscated.js:275292`, function `LHA`):
-
-A detailed prompt asking for a structured summary with these sections:
-
-1. **Primary Request and Intent** — What the user asked for
-2. **Key Technical Concepts** — Technologies and frameworks discussed
-3. **Files and Code Sections** — Files examined/modified with code snippets
-4. **Errors and Fixes** — Errors encountered and how they were resolved
-5. **Problem Solving** — Problems solved and ongoing troubleshooting
-6. **All User Messages** — Every non-tool-result user message (critical for preserving intent)
-7. **Pending Tasks** — Tasks explicitly asked to work on
-8. **Current Work** — Precise description of what was being done right before compaction
-9. **Optional Next Step** — Next step with **direct quotes** from recent conversation
-
-The prompt explicitly asks for:
-- `<analysis>` tags for the LLM's reasoning process
-- `<summary>` tags for the actual summary
-- **No tool use** — "IMPORTANT: Do NOT use any tools"
-- Technical precision — file names, full code snippets, function signatures
-
-If the user provides custom instructions (e.g., `/compact focus on test output`), they're appended as:
-```
-Additional Instructions:
-focus on test output
-```
-
-### Partial Compact Prompt
-
-There's also a separate prompt for **partial compaction** (`rv7` at line 275207) that only summarizes *recent* messages while keeping earlier retained context intact.
-
-### Post-Processing
-
-The LLM's response is processed by:
-1. `cleanSummaryXML()` — Strips `<analysis>` and `<summary>` tags, converts to plain text
-2. `formatSummaryForContinuation()` — Wraps the summary in a continuation message:
+**System prompt** (`deobfuscated.js:402099`) — unchanged verbatim:
 
 ```
-This session is being continued from a previous conversation that ran out of context.
-The summary below covers the earlier portion of the conversation.
-
-[cleaned summary text]
-
-If you need specific details from before compaction, read the full transcript at: [path]
+You are a helpful AI assistant tasked with summarizing conversations.
 ```
 
----
+**User prompt** (`deobfuscated.js:400873`, function renamed `buildSummarizationPrompt`) — the same 9 sections as 2.1.34 (Primary Request and Intent, Key Technical Concepts, Files and Code Sections, Errors and fixes, Problem Solving, All user messages, Pending Tasks, Current Work, Optional Next Step), but with two significant additions:
 
-## Auto-Compact System
-
-Claude Code can automatically compact when the context is getting full.
-
-**Source:** `deobfuscated.js:533083-533144`
-
-### How Thresholds Work
+**1. Prompt-injection hardening.** The tool-refusal language is now much stronger and, critically, positioned to survive user-supplied custom instructions (`deobfuscated.js:400874`):
 
 ```
-Context Window (e.g., 200K tokens)
-├── Reserved tokens (model-specific)
-├── Effective window = context window - reserved
-├── Auto-compact threshold = effective window - 13000
-├── Warning threshold = effective window - 20000
-├── Error threshold = effective window - 20000
-└── Blocking limit = context window - 3000
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- You already have all the context you need in the conversation above.
+- Tool calls will be REJECTED and will waste your only turn — you will fail the task.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
 ```
+
+A reminder is also appended **after** any user-supplied custom instructions (`deobfuscated.js:400984`), specifically so injected instructions can't override the no-tools rule.
+
+**2. Security-instruction preservation** (`deobfuscated.js:400897`, reinforced in section 6 at `400907`):
+
+```
+Note any security-relevant instructions or constraints the user stated (e.g., sensitive
+files or data to avoid, operations that must not be performed, credential or secret handling
+rules). These MUST be preserved verbatim in the summary so they continue to apply after
+compaction.
+```
+
+This closes a real gap: without it, a summary could silently drop a "never touch prod" or "don't read `.env`" instruction, and the post-compaction agent would resume without that constraint.
+
+There are three prompt variants — the full prompt (`W9n`), a recent-only prompt for partial/"summarize up to here" compaction (`DKp`), and a partial "up_to" prompt — all carrying the same hardening.
+
+## Auto-Compact, Precompute & Thresholds
+
+The classic threshold math is intact (`deobfuscated.js:619878`):
 
 | Threshold | Formula | Effect |
 |-----------|---------|--------|
-| **Auto-compact** | `effectiveWindow - 13000` | Triggers automatic compaction |
-| **Warning** | `effectiveWindow - 20000` | Shows warning indicator |
-| **Error** | `effectiveWindow - 20000` | Shows error indicator |
-| **Blocking** | `contextWindow - 3000` | Blocks further input |
+| **Auto-compact** | `effectiveWindow − 13000` | Triggers automatic compaction |
+| **Warning** | `effectiveWindow − 20000` | Warning indicator |
+| **Blocking** | `contextWindow − 3000` | Hard input block |
 
-### Controls
+New on top of this: a per-model/surface **`precomputeBufferFraction`** can trigger the background precompute *earlier* than the −13000 mark, so the summary is ready before the hard trigger. The precomputed result is cached with a **7-day TTL** (`deobfuscated.js:403713`).
 
-- `process.env.DISABLE_COMPACT` — Disables compact entirely
-- `process.env.DISABLE_AUTO_COMPACT` — Disables auto-compact only
-- `process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` — Override auto-compact threshold as percentage (e.g., "80" = 80%)
-- `process.env.CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` — Override blocking limit
-- `settings.autoCompactEnabled` — User setting toggle
+Incidental find while tracing this: the model context table for `claude-sonnet-5` (`deobfuscated.js:620223`) sets a default window of **967,000 tokens**, with `remote_cowork` and `local-agent` surfaces capped at 500,000 — a concrete artifact of Sonnet 5's native 1M context landing as the default model in this window.
 
-### Auto-Compact Guard
+## Circuit Breaker & Thrashing Detector
 
-Auto-compact is **skipped** when the `querySource` is `"session_memory"` or `"compact"` — preventing recursive compaction.
+Two independent safety mechanisms were added — both are *new since 2.1.34* and both exist because auto-compaction now runs unattended:
 
----
+- **Circuit breaker** (`deobfuscated.js:620266`): after **3 consecutive** auto-compact failures it trips, logs *"autocompact: circuit breaker tripped after N consecutive failures… skipping future attempts this session"*, fires `tengu_auto_compact_circuit_breaker`, and stops trying for the session.
+- **Thrashing detector** (`deobfuscated.js:620238`): distinct from the breaker — if the context refills to the limit within 3 turns of the previous compact, **3 times in a row**, it shows a user-facing message: *"Autocompact is thrashing: the context refilled to the limit within 3 turns of the previous compact, 3 times in a row. A file being read or a tool output is likely too large for the context window. Try reading in smaller chunks, or use /clear to start fresh."*
 
-## Session Memory Fast Path
+Retry logic also became adaptive. The legacy full-compact path keeps a fixed cap of **3** prompt-too-long retries (dropping the oldest ~20% each time). The reactive grouped compactor (`deobfuscated.js:402608`) has no fixed cap — it seeds its first drop-step from the **actual token overflow** (rather than starting minimal), then recomputes each subsequent step from the reported `tokenGap`, and terminates on success, group exhaustion, or unstrippable media. It also retries once with media stripped on a `media_too_large` failure.
 
-**Source:** `deobfuscated.js:533001` (function `nG6`)
+## Reactive Micro-Compaction
 
-This is a **zero-LLM-call** compaction path that uses a stored session memory template:
+The old size-based micro-compact that ran at the *start* of `/compact` (2.1.34's `Ym`) is no longer called from the manual path, and **`DISABLE_MICROCOMPACT` no longer exists** (zero occurrences in the 965K-line source). What replaced it is a separate, feature-flag-gated (`tengu_hazel_osprey`) mechanism that fires **reactively** when the server rejects a request with a `context_hint` (HTTP 422/424, telemetry `tengu_context_hint_reject`): it clears old tool results to `"[Old tool result content cleared]"`, or persists large ones to disk and replaces them with:
 
-1. Check if session memory is enabled (`iG6()`)
-2. Load session memory state
-3. Get the last summarized message ID and the session memory template
-4. Find the split point — messages before this point are already summarized
-5. Extract recent messages (after the split)
-6. Build the compacted message list using the template + recent messages
-7. Count tokens — if still above threshold, fall back to LLM path
+```
+Tool result saved to: ${filepath}
 
-This path is only attempted when:
-- No custom summarization instructions are provided
-- Session memory feature is enabled
-- A valid session memory template exists and is non-empty
+Use Read to view
+```
 
----
-
-## Micro-Compact Pre-Processing
-
-**Source:** `deobfuscated.js:532598` (function `Ym`)
-
-Before the main compaction, large tool results are **shrunk** to save tokens:
-
-1. Identify tool_use/tool_result pairs from "compactible" tools (Read, Bash, etc.)
-2. Keep the most recent N tool results intact
-3. For older ones: save the full content to a file, replace the tool_result with a reference like `"Tool result saved to: /path\n\nUse Read to view"`
-4. Only actually compact if above the warning threshold (unless explicit target)
-
-Controlled by `process.env.DISABLE_MICROCOMPACT`.
-
----
+(wrapped in `<persisted-output>` tags). This is driven by the server telling the client it's over budget, not by the client pre-trimming — a more precise trigger than the old heuristic.
 
 ## Post-Compact Context Restoration
 
-After the LLM generates a summary, several pieces of context are **restored** to the new conversation:
+After the summary is produced, several pieces of context are restored (`deobfuscated.js:402207`):
 
-| What | How | Why |
-|------|-----|-----|
-| **Recently read files** | Re-read top N files by recency | Preserves file context for next turns |
-| **Agent memory** | `getAgentMemory(agentId)` | Persistent agent memory across sessions |
-| **Agent context** | `getAgentContextMessage(agentId)` | Agent-specific context |
-| **Todo list** | `getTodoContext()` | Preserves task tracking |
-| **Lifecycle hooks** | `runLifecycleHooks("compact")` | Custom post-compact setup |
+| What | How | New since 2.1.34? |
+|------|-----|-------------------|
+| Recently-read files | Re-read top files by recency, capped per-file and in aggregate | No |
+| Agent memory / context | Memory functions | No |
+| Todo list | Todo restore | No |
+| **Plan-mode file** | `plan_file_reference` restore (`402263`) | **Yes** |
+| **Recently-invoked skills** | Skill content restore, token-budget capped (`402275`) | **Yes** |
+| Lifecycle hooks | Session-start-style hooks run with the `"compact"` event | No |
 
-The final message list is:
-```
-[compact_boundary_marker, summary_message, ...messagesToKeep, ...attachments, ...hookResults]
-```
-
----
+The two new restorations (plan file, skills) exist because Plan mode and the Skills system both postdate the original analysis.
 
 ## Hooks System
 
-### PreCompact Hook
+**PreCompact hook** (`deobfuscated.js:627034`) — unchanged shape:
 
-**Event:** `PreCompact`
-**Trigger values:** `"manual"` (user ran `/compact`) or `"auto"` (auto-compact)
+```js
+{ hook_event_name: "PreCompact", trigger: "manual" | "auto", custom_instructions: ... }
+```
 
-Hook output can:
-- **Inject additional summarization instructions** — Successful hook output is appended to the custom instructions
-- **Show a display message** — Shown to the user after compaction
-
-### Post-Compact Lifecycle Hook
-
-After compaction, **lifecycle hooks** run with the `"compact"` event, since compaction effectively creates a "new session" from the LLM's perspective.
-
----
+Fired from both the legacy full-compact path and the manual entry point. Hook output can inject additional summarization instructions and show a display message. After compaction, session-start-style lifecycle hooks run with the `"compact"` event, since compaction effectively begins a "new session" from the model's perspective.
 
 ## Key Constants
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `MAX_COMPACT_OUTPUT_TOKENS` | 20,000 | Max tokens for the compact LLM response |
-| `AUTO_COMPACT_RESERVE` | 13,000 | Token reserve before auto-compact triggers |
-| `WARNING_THRESHOLD_OFFSET` | 20,000 | Offset from effective window for warning |
-| `BLOCKING_LIMIT_OFFSET` | 3,000 | Offset from context window for hard block |
-| `minTokens` | 10,000 | Min tokens for compact config |
-| `minTextBlockMessages` | 5 | Min text block messages for compact |
-| `maxTokens` | 40,000 | Max tokens for compact config |
-
----
+| Constant | Value | Line | Purpose |
+|----------|-------|------|---------|
+| Auto-compact reserve | 13,000 | 619879 | `effectiveWindow − 13000` = auto-compact trigger |
+| Warning offset | 20,000 | 619892 | `effectiveWindow − 20000` = warn level |
+| Blocking reserve | 3,000 | 619894 | `contextWindow − 3000` = hard block |
+| Legacy PTL retry cap | 3 | 402394 | Max prompt-too-long retries (legacy path) |
+| Legacy PTL drop fraction | 0.2 | 401346 | Oldest fraction dropped per legacy retry |
+| Circuit-breaker trip count | 3 | 620526 | Consecutive failures before breaker trips |
+| Thrashing trip count | 3 | 620261 | Rapid-refill events before thrash warning |
+| Precompute cache TTL | 7 days | 403713 | Precomputed-compact cache lifetime |
+| `MAX_COMPACT_OUTPUT_TOKENS` | **not found** | — | The 2.1.34 constant (20,000) could not be located under any name in current source; the compact call now passes a generic per-model max-output config. Treat as removed/unverified. |
 
 ## Environment Variables
 
-| Variable | Effect |
-|----------|--------|
-| `DISABLE_COMPACT` | Disables `/compact` entirely |
-| `DISABLE_AUTO_COMPACT` | Disables automatic compaction |
-| `DISABLE_MICROCOMPACT` | Disables pre-processing of large tool results |
-| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | Override auto-compact threshold (percentage) |
-| `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` | Override the hard blocking limit |
+| Variable | Status | Effect |
+|----------|--------|--------|
+| `DISABLE_COMPACT` | present | Disables `/compact` entirely |
+| `DISABLE_AUTO_COMPACT` | present | Disables automatic compaction |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | present | Override auto-compact threshold (percentage) |
+| `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` | present | Override the hard blocking limit |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | **new** | Set the auto-compact window (also settable via `/autocompact`) |
+| `DISABLE_MICROCOMPACT` | **removed** | No longer exists — the micro-compact it gated moved to the reactive `context_hint`-reject mechanism |
 
----
+## How this evolved since 2.1.34
 
-## Summary
+| Change | 2.1.34 | 2.1.201 | Likely why |
+|--------|--------|---------|------------|
+| **Fast path** | Zero-LLM session-memory template skip | Removed; replaced by background **precompute/borrow** (LLM runs ahead of time, result cached 7d) | A template skip is brittle; precomputing the real summary is both accurate and, in the good case, invisible |
+| **Prompt safety** | "IMPORTANT: Do NOT use any tools" | Hardened CRITICAL block + reminder placed *after* custom instructions + verbatim security-instruction preservation | Compaction became an injection surface and a place where safety constraints could silently drop |
+| **Robustness** | Fixed retry cap | Circuit breaker (3 fails) + thrashing detector (3 rapid refills) + overflow-seeded adaptive retry | Auto-compaction now runs unattended and must fail safe instead of looping |
+| **Cost** | Full-context summarization call | **Prompt-cache sharing**: forks the conversation cache for the summary call (`tengu_compact_cache_prefix`) | Avoids paying full input cost to summarize context the cache already holds |
+| **Micro-compact** | Client-side pre-trim, `DISABLE_MICROCOMPACT` | Reactive, server-`context_hint`-driven, flag-gated | Trim exactly when the server says you're over, not on a client heuristic |
+| **Config surface** | Env vars only | New `/autocompact` command + `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-compaction became prominent enough to deserve a first-class control |
+| **Restoration** | Files, memory, todos | + Plan-mode file + recently-invoked skills | New subsystems (Plan mode, Skills) that postdate 2.1.34 |
 
-The `/compact` command is a sophisticated context management system that:
-
-1. **Tries the fast path first** — Session memory can skip the LLM call entirely
-2. **Pre-processes messages** — Large tool results are saved to files and replaced with references
-3. **Runs hooks** — Users can inject custom summarization instructions via PreCompact hooks
-4. **Calls Claude** — With a detailed 9-section summarization prompt, max 20K output tokens, thinking disabled, tool use denied
-5. **Restores context** — Re-reads recently accessed files, adds agent memory, todos
-6. **Replaces the conversation** — The entire message history becomes: boundary marker + summary + preserved messages + attachments + hook results
+The throughline: at 2.1.34, `/compact` was a user-invoked command that tried to avoid an LLM call. By 2.1.201 it is the visible tip of a mostly-automatic, background context-management system that assumes the LLM call, tries to have it done ahead of time, shares cache to make it cheap, and wraps the whole thing in breakers so it can run without a human watching.
